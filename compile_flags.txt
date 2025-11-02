@@ -1,0 +1,9 @@
+-std=c23
+-DXLIST_T=struct S{void*p;int k;}
+-DXLIST_NAME=SXList
+-DXLIST_IMPL
+-DXLIST_SENTINEL=(struct S){.k=INT_MIN}
+-DXLIST_IS_SENTINEL(a)=(a->k == INT_MIN)
+-DXLIST_PTR_FIELD=p
+-XC
+-isystemC:/Users/PCD/Downloads/w64devkit/include
