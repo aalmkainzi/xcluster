@@ -46,6 +46,7 @@ typedef struct XList
     XListBucket *end_sentinel;
     size_t b_count;
     
+    size_t prev_cap;
     size_t count;
 } XList;
 
@@ -75,7 +76,6 @@ typedef struct XListIterator
 void xlist_init(XList *ls)
 {
     memset(ls, 0, sizeof(XList));
-    ls->b_count = 0;
     
     ls->end_sentinel = malloc(sizeof(XListBucket));
     memset(ls->end_sentinel, 0, sizeof(XListBucket));
@@ -84,8 +84,9 @@ void xlist_init(XList *ls)
     ls->tail = ls->end_sentinel;
     
     ls->nfb_cap = 16;
-    ls->nfb_count = 0;
     ls->not_full_buckets = malloc(sizeof(XListBucket*) * ls->nfb_cap);
+    
+    ls->prev_cap = 64;
 }
 
 #define XLIST_MAYBE_GROW(ptr, cap_ptr, count) \
@@ -124,7 +125,9 @@ XLIST_T *xlist_put_uninit(XList *ls)
     
     memset(new_bucket, 0, sizeof(XListBucket));
     new_bucket->not_full_index = ls->nfb_count++;
-    new_bucket->cap = 64;
+    new_bucket->cap = ls->prev_cap * 2;
+    ls->prev_cap *= 2;
+    
     new_bucket->elms = malloc(sizeof(XLIST_T) * new_bucket->cap);
     new_bucket->count = 1;
     
@@ -156,6 +159,13 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
     
     XListBucket *bp = (XListBucket*) end->XLIST_PTR_FIELD;
     
+    XListBucket *new_bucket = malloc(sizeof(XListBucket));
+    
+    XListBucket *old_next = bp->next;
+    bp->next = new_bucket;
+    new_bucket->next = old_next;
+    new_bucket->prev = bp;
+    old_next->prev = new_bucket;
     // TODO create new bucket and assign its beginning to elm+1, make elm sentinel with ptr value pointing to the new bucket
 }
 
