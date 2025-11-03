@@ -3,15 +3,11 @@ XList stands for "Exploding Array",
 when deleting, it splits the the hole into 2 arrays,
 in order to maintain pointer/iterator stability of other elements.
 
-
-
 when inserting, it looks into stack of non_full_buckets, if empty, alloc new bucket.
 
 when deleting, split into 2 arrays, left one is full from the start, right one will keep the old cap + left_arr_size
 
 but how will iterators be stable? and what about it_next()?
-
-
 
 */
 
@@ -31,7 +27,8 @@ typedef struct XListBucket
     // issue is, if prev is already deleted....
     // this idea is a wash, just have a bucket reserve so we can reuse its buffers
     
-    
+    struct XListBucket *next;
+    struct XListBucket *prev;
     size_t not_full_index;
     XLIST_T *elms;
     size_t count;
@@ -44,9 +41,10 @@ typedef struct XList
     size_t nfb_count;
     size_t nfb_cap;
     
-    XListBucket *buckets;
+    XListBucket *tail;
+    XListBucket *head;
+    XListBucket *end_sentinel;
     size_t b_count;
-    size_t b_cap;
     
     size_t count;
 } XList;
@@ -77,9 +75,13 @@ typedef struct XListIterator
 void xlist_init(XList *ls)
 {
     memset(ls, 0, sizeof(XList));
-    ls->b_cap = 16;
     ls->b_count = 0;
-    ls->buckets = malloc(sizeof(XListBucket) * ls->b_cap);
+    
+    ls->end_sentinel = malloc(sizeof(XListBucket));
+    memset(ls->end_sentinel, 0, sizeof(XListBucket));
+    
+    ls->head = ls->end_sentinel;
+    ls->tail = ls->end_sentinel;
     
     ls->nfb_cap = 16;
     ls->nfb_count = 0;
@@ -116,17 +118,32 @@ XLIST_T *xlist_put_uninit(XList *ls)
         return &bucket->elms[bucket->count - 1];
     }
     
-    XLIST_MAYBE_GROW(ls->buckets, &ls->b_cap, ls->b_count);
     XLIST_MAYBE_GROW(ls->not_full_buckets, &ls->nfb_cap, ls->nfb_count);
     
-    XListBucket *new_bucket = &ls->buckets[ls->b_count++];
+    XListBucket *new_bucket = malloc(sizeof(XListBucket));
     
     memset(new_bucket, 0, sizeof(XListBucket));
     new_bucket->not_full_index = ls->nfb_count++;
     new_bucket->cap = 64;
     new_bucket->elms = malloc(sizeof(XLIST_T) * new_bucket->cap);
     new_bucket->count = 1;
+    
+    if(ls->count == 0)
+    {
+        ls->head = new_bucket;
+    }
+    else
+    {
+        ls->tail->next = new_bucket;
+        new_bucket->prev = ls->tail;
+    }
+    ls->tail = new_bucket;
+    ls->end_sentinel->prev = new_bucket;
+    new_bucket->next = ls->end_sentinel;
+
+    ls->count += 1;
     return &new_bucket->elms[0];
+    // TODO close bridges
 }
 
 XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
@@ -137,6 +154,9 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
         end++;
     }
     
+    XListBucket *bp = (XListBucket*) end->XLIST_PTR_FIELD;
+    
+    // TODO create new bucket and assign its beginning to elm+1, make elm sentinel with ptr value pointing to the new bucket
 }
 
 
