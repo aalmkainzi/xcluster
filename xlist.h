@@ -1,5 +1,5 @@
 /*
-XList stands for "Exploding Array",
+XLIST_NAME stands for "Exploding Array",
 when deleting, it splits the the hole into 2 arrays,
 in order to maintain pointer/iterator stability of other elements.
 
@@ -13,7 +13,6 @@ but how will iterators be stable? and what about it_next()?
 
 #include <stddef.h>
 #include <stdint.h>
-#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -21,6 +20,20 @@ but how will iterators be stable? and what about it_next()?
 #if !defined(XLIST_T) || !defined(XLIST_NAME) || !defined(XLIST_SENTINEL) || !defined(XLIST_IS_SENTINEL) || !defined(XLIST_PTR_FIELD)
     #error "Must define XLIST_T, XLIST_NAME, XLIST_SENTINEL, and XLIST_IS_SENTINEL"
 #endif
+
+#define XLIST_CAT_(a, b) a##b
+#define XLIST_CAT(a, b) XLIST_CAT_(a,b)
+
+#define XListBucket      XLIST_CAT(XLIST_NAME, Bucket_T)
+#define XListIterator    XLIST_CAT(XLIST_NAME, Iterator_T)
+
+#define xlist_init       XLIST_CAT(XLIST_NAME, _init)
+#define xlist_put_uninit XLIST_CAT(XLIST_NAME, _put_uninit)
+#define xlist_put        XLIST_CAT(XLIST_NAME, _put)
+#define xlist_del        XLIST_CAT(XLIST_NAME, _del)
+#define xlist_deinit     XLIST_CAT(XLIST_NAME, _deinit)
+#define xlist_begin      XLIST_CAT(XLIST_NAME, _begin)
+#define xlist_end        XLIST_CAT(XLIST_NAME, _end)
 
 typedef struct XListBucket
 {
@@ -36,7 +49,7 @@ typedef struct XListBucket
     size_t cap;
 } XListBucket;
 
-typedef struct XList
+typedef struct XLIST_NAME
 {
     XListBucket **not_full_buckets;
     size_t nfb_count;
@@ -53,7 +66,7 @@ typedef struct XList
     void **allocations;
     size_t al_count;
     size_t al_cap;
-} XList;
+} XLIST_NAME;
 
 typedef struct XListIterator
 {
@@ -77,10 +90,28 @@ typedef struct XListIterator
     // so this means: requires sentinel, but with one field we can customize
 } XListIterator;
 
+#ifdef XLIST_IMPL
 
-void xlist_init(XList *ls)
+#define xlist_erase_not_full_bucket XLIST_CAT(XLIST_NAME, _erase_not_full_bucket)
+#define xlist_push_not_full_bucket  XLIST_CAT(XLIST_NAME, _push_not_full_bucket)
+
+#define XLIST_MAYBE_GROW(ptr, cap_ptr, count, ...)                   \
+do                                                                   \
+{                                                                    \
+    size_t _n = 0 __VA_OPT__(+1) ? 0 __VA_OPT__(+(__VA_ARGS__)) : 1; \
+    size_t *_cap = (cap_ptr);                                        \
+    const size_t _count = (count);                                   \
+    if((_count + _n - 1) >= *_cap)                                   \
+    {                                                                \
+        *_cap = (*_cap + _n) * 2;                                    \
+        ptr = realloc(ptr, *_cap * sizeof(*(ptr)));                  \
+    }                                                                \
+} while(0)
+
+void xlist_init(XLIST_NAME *ls)
 {
-    memset(ls, 0, sizeof(XList));
+    memset(ls, 0, sizeof(XLIST_NAME));
+    
     
     ls->end_sentinel = malloc(sizeof(XListBucket));
     memset(ls->end_sentinel, 0, sizeof(XListBucket));
@@ -91,26 +122,36 @@ void xlist_init(XList *ls)
     ls->nfb_cap = 16;
     ls->not_full_buckets = malloc(sizeof(XListBucket*) * ls->nfb_cap);
     
-    ls->prev_cap = 64;
-    
     ls->al_cap = 16;
     ls->allocations = malloc(sizeof(*ls->allocations) * ls->al_cap);
+    
+    ls->prev_cap = 64;
 }
 
-#define XLIST_MAYBE_GROW(ptr, cap_ptr, count, ...)                       \
-do                                                                       \
-{                                                                        \
-    size_t _n = 0 __VA_OPT__(+1) ? 0 __VA_OPT__(+(__VA_ARGS__)) : 1;     \
-    size_t *_cap = (cap_ptr);                                            \
-    const size_t _count = (count);                                       \
-    if((_count + _n - 1) >= *_cap)                                       \
-    {                                                                    \
-        *_cap = (*_cap + _n) * 2;                                        \
-        ptr = realloc(ptr, *_cap * sizeof(*(ptr)));                      \
-    }                                                                    \
-} while(0)
+void xlist_erase_not_full_bucket(XLIST_NAME *ls, XListBucket *b)
+{
+    assert(b->not_full_index != (size_t)-1);
+    
+    size_t index = b->not_full_index;
+    size_t last = ls->nfb_count - 1;
+    
+    ls->not_full_buckets[index] = ls->not_full_buckets[last];
+    ls->not_full_buckets[index]->not_full_index = index;
+    ls->nfb_count -= 1;
+    b->not_full_index = (size_t)-1;
+}
 
-XLIST_T *xlist_put_uninit(XList *ls)
+void xlist_push_not_full_bucket(XLIST_NAME *ls, XListBucket *b)
+{
+    assert(b->not_full_index == (size_t)-1);
+    
+    XLIST_MAYBE_GROW(ls->not_full_buckets, &ls->nfb_cap, ls->nfb_count);
+    ls->not_full_buckets[ls->nfb_count] = b;
+    b->not_full_index = ls->nfb_count;
+    ls->nfb_count += 1;
+}
+
+XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
 {
     if(ls->nfb_count != 0)
     {
@@ -124,26 +165,26 @@ XLIST_T *xlist_put_uninit(XList *ls)
         
         if(bucket->count == bucket->cap)
         {
-            bucket->not_full_index = -1;
+            bucket->not_full_index = (size_t)-1;
             ls->nfb_count -= 1;
         }
         
         return elm;
     }
     
-    XLIST_MAYBE_GROW(ls->not_full_buckets, &ls->nfb_cap, ls->nfb_count);
     XLIST_MAYBE_GROW(ls->allocations, &ls->al_cap, ls->al_count, 2);
     
     XListBucket *new_bucket = malloc(sizeof(XListBucket));
-    
     ls->allocations[ls->al_count++] = new_bucket;
     
     memset(new_bucket, 0, sizeof(XListBucket));
-    new_bucket->not_full_index = ls->nfb_count++;
+    new_bucket->not_full_index = (size_t)-1;
     new_bucket->cap = ls->prev_cap * 2;
     ls->prev_cap *= 2;
     
     new_bucket->elms = malloc(sizeof(XLIST_T) * (new_bucket->cap + 1));
+    ls->allocations[ls->al_count++] = new_bucket->elms;
+    
     XLIST_T *elm = &new_bucket->elms[0];
     
     new_bucket->elms[1] = XLIST_SENTINEL;
@@ -163,21 +204,13 @@ XLIST_T *xlist_put_uninit(XList *ls)
     ls->end_sentinel->prev = new_bucket;
     new_bucket->next = ls->end_sentinel;
     
-    
+    xlist_push_not_full_bucket(ls, new_bucket);
     ls->count += 1;
     return elm;
     // TODO close bridges
 }
 
-void xlist_erase_not_full_bucket(XList *ls, XListBucket *b)
-{
-    assert(b->not_full_index != (size_t)-1);
-    
-    ls->not_full_buckets[b->not_full_index] = ls->not_full_buckets[ls->nfb_count - 1];
-    ls->nfb_count -= 1;
-}
-
-XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
+XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
 {
     *elm = XLIST_SENTINEL;
     
@@ -212,6 +245,11 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
     }
     else if(deleted_index == bp->count - 1)
     {
+        // TODO same thing
+        // we shouldnt do it
+        // instead should split into new bucket to the right, with cap and count 0, but unlink it from this bucket
+        // will only be used as a bridge in case a new element will be inserted, so the slot can be reused
+        // remember, merging two nodes makes the total cap = cap1+cap2+1 because we need one less sentinel
         bp->count -= 1;
         return bp->next->elms;
     }
@@ -225,7 +263,7 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
         bp->count = deleted_index;
         bp->cap = bp->count;
         
-        if(bp->not_full_index != -1)
+        if(bp->not_full_index != (size_t)-1)
         {
             xlist_erase_not_full_bucket(ls, bp);
         }
@@ -251,29 +289,35 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
         new_bucket->count = old_count - deleted_index - 1;
         if(new_bucket->cap > new_bucket->count)
         {
-            XLIST_MAYBE_GROW(ls->not_full_buckets, &ls->nfb_cap, ls->nfb_count);
-            ls->not_full_buckets[ls->nfb_count] = new_bucket;
-            new_bucket->not_full_index = ls->nfb_count;
-            ls->nfb_count += 1;
+            xlist_push_not_full_bucket(ls, new_bucket);
         }
+        
+        return new_bucket->elms;
     }
-    
 }
 
-void xlist_deinit(XList *ls)
+void xlist_deinit(XLIST_NAME *ls)
 {
     for(size_t i = 0 ; i < ls->al_count ; i++)
     {
         free(ls->allocations[i]);
     }
+    free(ls->end_sentinel);
     free(ls->allocations);
     free(ls->not_full_buckets);
 }
 
+XListIterator xlist_begin(XLIST_NAME *ls)
+{
+    return (XListIterator){ls->head->elms};
+}
 
+XListIterator xlist_end(XLIST_NAME *ls)
+{
+    return (XListIterator){ls->end_sentinel->elms};
+}
 
-
-
+#endif
 
 
 
