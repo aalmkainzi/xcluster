@@ -16,6 +16,7 @@ but how will iterators be stable? and what about it_next()?
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #if !defined(XLIST_T) || !defined(XLIST_NAME) || !defined(XLIST_SENTINEL) || !defined(XLIST_IS_SENTINEL) || !defined(XLIST_PTR_FIELD)
     #error "Must define XLIST_T, XLIST_NAME, XLIST_SENTINEL, and XLIST_IS_SENTINEL"
@@ -168,6 +169,14 @@ XLIST_T *xlist_put_uninit(XList *ls)
     // TODO close bridges
 }
 
+void xlist_erase_not_full_bucket(XList *ls, XListBucket *b)
+{
+    assert(b->not_full_index != (size_t)-1);
+    
+    ls->not_full_buckets[b->not_full_index] = ls->not_full_buckets[ls->nfb_count - 1];
+    ls->nfb_count -= 1;
+}
+
 XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
 {
     *elm = XLIST_SENTINEL;
@@ -179,16 +188,48 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
     }
     
     XListBucket *bp = (XListBucket*) end->XLIST_PTR_FIELD;
-    bp->count = elm - bp->elms;
-    if(bp->count == 0)
+    size_t deleted_index = elm - bp->elms;
+    if(deleted_index == 0)
     {
-        // TODO delete the bucket
-        // TODO and put it in some reserve
+        // just shift the elms by 1
+        XLIST_T *ret = &bp->elms[1];
+        bp->elms += 1;
+        bp->count -= 1;
+        bp->cap -= 1;
+        return ret;
         
-        return &bp->next->elms[0];
+        // TODO we need some mechanism to reuse the deleted slot...
+        // maybe the planned bridge mechanism can also handle this
+        // case by having NULL ptr for prev bucket.
+        // Another problem is bridges next to each other...
+        
+        // hmmm maybe we shouldn't shift the elms like that, instead
+        // create a new bucket with size and cap 0, don't link it with the others,
+        // just store it for the bridge mechanism to work properly
+        
+        // TODO also handle if count is now 0,
+        // you don't want it linked to the other buckets if its empty
+    }
+    else if(deleted_index == bp->count - 1)
+    {
+        bp->count -= 1;
+        return bp->next->elms;
     }
     else
     {
+        // split into new bucket
+        
+        size_t old_count = bp->count;
+        size_t old_cap = bp->cap;
+        
+        bp->count = deleted_index;
+        bp->cap = bp->count;
+        
+        if(bp->not_full_index != -1)
+        {
+            xlist_erase_not_full_bucket(ls, bp);
+        }
+        
         // this will be bp->next
         XListBucket *new_bucket = malloc(sizeof(XListBucket));
         
@@ -199,8 +240,22 @@ XLIST_T *xlist_del(XList *ls, XLIST_T *elm)
         old_next->prev = new_bucket;
         
         new_bucket->elms = elm + 1;
-        new_bucket->cap =
-        // TODO create new bucket and assign its beginning to elm+1, make elm sentinel with ptr value pointing to the new bucket
+        
+        // let's say old_cap is 8, deleted index is 2
+        // that means new_bucket will be starting at 3 through 8, so 0->5 so cap=5
+        // let's say old_count is 6
+        // new count is 2
+        // new cap is 2
+        // new_bucket count is 3
+        new_bucket->cap   = old_cap   - deleted_index - 1;
+        new_bucket->count = old_count - deleted_index - 1;
+        if(new_bucket->cap > new_bucket->count)
+        {
+            XLIST_MAYBE_GROW(ls->not_full_buckets, &ls->nfb_cap, ls->nfb_count);
+            ls->not_full_buckets[ls->nfb_count] = new_bucket;
+            new_bucket->not_full_index = ls->nfb_count;
+            ls->nfb_count += 1;
+        }
     }
     
 }
