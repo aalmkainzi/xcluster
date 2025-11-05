@@ -42,6 +42,7 @@ typedef struct xlist_bucket_t
     // issue is, if prev is already deleted....
     // this idea is a wash, just have a bucket reserve so we can reuse its buffers
     
+    // TODO we also need bridge_prev and bridge_next for buckets that link by buffer (may be NULL)
     struct xlist_bucket_t *next;
     struct xlist_bucket_t *prev;
     size_t not_full_index;
@@ -95,6 +96,7 @@ typedef struct xlist_iter_t
 
 #define xlist_erase_not_full_bucket XLIST_CAT(XLIST_NAME, _erase_not_full_bucket)
 #define xlist_push_not_full_bucket  XLIST_CAT(XLIST_NAME, _push_not_full_bucket)
+#define xlist_assign_sentinel       XLIST_CAT(XLIST_NAME, _assign_sentinel)
 
 #define XLIST_MAYBE_GROW(ptr, cap_ptr, count, ...)                   \
 do                                                                   \
@@ -108,6 +110,12 @@ do                                                                   \
         ptr = realloc(ptr, *_cap * sizeof(*(ptr)));                  \
     }                                                                \
 } while(0)
+
+void xlist_assign_sentinel(XLIST_T *ptr, xlist_bucket_t *bucket)
+{
+    *ptr = XLIST_SENTINEL;
+    ptr->XLIST_PTR_FIELD = (void*) bucket;
+}
 
 void xlist_init(XLIST_NAME *ls)
 {
@@ -162,7 +170,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
         XLIST_T *elm = &bucket->elms[bucket->count];
         bucket->count++;
         
-        bucket->elms[bucket->count] = XLIST_SENTINEL;
+        xlist_assign_sentinel(&bucket->elms[bucket->count], bucket);
         
         if(bucket->count == bucket->cap)
         {
@@ -188,7 +196,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     
     XLIST_T *elm = &new_bucket->elms[0];
     
-    new_bucket->elms[1] = XLIST_SENTINEL;
+    xlist_assign_sentinel(&new_bucket->elms[1], new_bucket);
     
     new_bucket->count = 1;
     
@@ -220,8 +228,6 @@ XLIST_T *xlist_put(XLIST_NAME *ls, XLIST_T elm)
 
 XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
 {
-    *elm = XLIST_SENTINEL;
-    
     XLIST_T *end = elm;
     while(!XLIST_IS_SENTINEL(end))
     {
@@ -259,11 +265,13 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         // will only be used as a bridge in case a new element will be inserted, so the slot can be reused
         // remember, merging two nodes makes the total cap = cap1+cap2+1 because we need one less sentinel
         bp->count -= 1;
+        xlist_assign_sentinel(&bp->elms[bp->count], bp);
         return bp->next->elms;
     }
     else
     {
         // split into new bucket
+        xlist_assign_sentinel(elm, bp);
         
         size_t old_count = bp->count;
         size_t old_cap = bp->cap;
@@ -299,6 +307,8 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         {
             xlist_push_not_full_bucket(ls, new_bucket);
         }
+        
+        xlist_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
         return new_bucket->elms;
     }
@@ -338,5 +348,21 @@ xlist_iter_t xlist_iter_next(xlist_iter_t it)
 
 #endif
 
+#undef XLIST_CAT_
+#undef XLIST_CAT
 
+#undef xlist_bucket_t
+#undef xlist_iter_t
 
+#undef xlist_init
+#undef xlist_put_uninit
+#undef xlist_put
+#undef xlist_del
+#undef xlist_deinit
+#undef xlist_begin
+#undef xlist_end
+#undef xlist_iter_next
+
+#undef xlist_erase_not_full_bucket
+#undef xlist_push_not_full_bucket 
+#undef xlist_assign_sentinel
