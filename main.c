@@ -21,7 +21,12 @@ int main()
     ss a;
     xlist_init(&a);
     
-    xlist_put_uninit(&a);
+    S elm = {.k = 50};
+    
+    for(int i = 0 ; i < 100 ; i++)
+    {
+        xlist_put(&a, elm);
+    }
     
     xlist_deinit(&a);
     return 0;

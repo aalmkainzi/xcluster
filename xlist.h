@@ -24,8 +24,8 @@ but how will iterators be stable? and what about it_next()?
 #define XLIST_CAT_(a, b) a##b
 #define XLIST_CAT(a, b) XLIST_CAT_(a,b)
 
-#define XListBucket      XLIST_CAT(XLIST_NAME, Bucket_T)
-#define XListIterator    XLIST_CAT(XLIST_NAME, Iterator_T)
+#define xlist_bucket_t   XLIST_CAT(XLIST_NAME, _bucket_t)
+#define xlist_iter_t     XLIST_CAT(XLIST_NAME, _iter_t)
 
 #define xlist_init       XLIST_CAT(XLIST_NAME, _init)
 #define xlist_put_uninit XLIST_CAT(XLIST_NAME, _put_uninit)
@@ -34,30 +34,31 @@ but how will iterators be stable? and what about it_next()?
 #define xlist_deinit     XLIST_CAT(XLIST_NAME, _deinit)
 #define xlist_begin      XLIST_CAT(XLIST_NAME, _begin)
 #define xlist_end        XLIST_CAT(XLIST_NAME, _end)
+#define xlist_iter_next  XLIST_CAT(XLIST_NAME, _iter_next)
 
-typedef struct XListBucket
+typedef struct xlist_bucket_t
 {
     // maybe we do add prev ptr here. not for linked list traversal, but to say they are actually connected in memory, so if this bucket is about to be deleted, the prev one can just extend its cap. the prev field can be NULL
     // issue is, if prev is already deleted....
     // this idea is a wash, just have a bucket reserve so we can reuse its buffers
     
-    struct XListBucket *next;
-    struct XListBucket *prev;
+    struct xlist_bucket_t *next;
+    struct xlist_bucket_t *prev;
     size_t not_full_index;
     XLIST_T *elms;
     size_t count;
     size_t cap;
-} XListBucket;
+} xlist_bucket_t;
 
 typedef struct XLIST_NAME
 {
-    XListBucket **not_full_buckets;
+    xlist_bucket_t **not_full_buckets;
     size_t nfb_count;
     size_t nfb_cap;
     
-    XListBucket *tail;
-    XListBucket *head;
-    XListBucket *end_sentinel;
+    xlist_bucket_t *tail;
+    xlist_bucket_t *head;
+    xlist_bucket_t *end_sentinel;
     size_t b_count;
     
     size_t prev_cap;
@@ -68,7 +69,7 @@ typedef struct XLIST_NAME
     size_t al_cap;
 } XLIST_NAME;
 
-typedef struct XListIterator
+typedef struct xlist_iter_t
 {
     XLIST_T *ptr;
     //size_t id; // something to do with index+bucket?
@@ -88,7 +89,7 @@ typedef struct XListIterator
     
     // maybe require the sentinel have a ptr field, which we can reuse to make it a ptr to the bucket
     // so this means: requires sentinel, but with one field we can customize
-} XListIterator;
+} xlist_iter_t;
 
 #ifdef XLIST_IMPL
 
@@ -113,14 +114,14 @@ void xlist_init(XLIST_NAME *ls)
     memset(ls, 0, sizeof(XLIST_NAME));
     
     
-    ls->end_sentinel = malloc(sizeof(XListBucket));
-    memset(ls->end_sentinel, 0, sizeof(XListBucket));
+    ls->end_sentinel = malloc(sizeof(xlist_bucket_t));
+    memset(ls->end_sentinel, 0, sizeof(xlist_bucket_t));
     
     ls->head = ls->end_sentinel;
     ls->tail = ls->end_sentinel;
     
     ls->nfb_cap = 16;
-    ls->not_full_buckets = malloc(sizeof(XListBucket*) * ls->nfb_cap);
+    ls->not_full_buckets = malloc(sizeof(xlist_bucket_t*) * ls->nfb_cap);
     
     ls->al_cap = 16;
     ls->allocations = malloc(sizeof(*ls->allocations) * ls->al_cap);
@@ -128,7 +129,7 @@ void xlist_init(XLIST_NAME *ls)
     ls->prev_cap = 64;
 }
 
-void xlist_erase_not_full_bucket(XLIST_NAME *ls, XListBucket *b)
+void xlist_erase_not_full_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
 {
     assert(b->not_full_index != (size_t)-1);
     
@@ -141,7 +142,7 @@ void xlist_erase_not_full_bucket(XLIST_NAME *ls, XListBucket *b)
     b->not_full_index = (size_t)-1;
 }
 
-void xlist_push_not_full_bucket(XLIST_NAME *ls, XListBucket *b)
+void xlist_push_not_full_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
 {
     assert(b->not_full_index == (size_t)-1);
     
@@ -157,7 +158,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     {
         ls->count++;
         
-        XListBucket *bucket = ls->not_full_buckets[ls->nfb_count - 1];
+        xlist_bucket_t *bucket = ls->not_full_buckets[ls->nfb_count - 1];
         XLIST_T *elm = &bucket->elms[bucket->count];
         bucket->count++;
         
@@ -174,10 +175,10 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     
     XLIST_MAYBE_GROW(ls->allocations, &ls->al_cap, ls->al_count, 2);
     
-    XListBucket *new_bucket = malloc(sizeof(XListBucket));
+    xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
     ls->allocations[ls->al_count++] = new_bucket;
     
-    memset(new_bucket, 0, sizeof(XListBucket));
+    memset(new_bucket, 0, sizeof(xlist_bucket_t));
     new_bucket->not_full_index = (size_t)-1;
     new_bucket->cap = ls->prev_cap * 2;
     ls->prev_cap *= 2;
@@ -210,6 +211,13 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     // TODO close bridges
 }
 
+XLIST_T *xlist_put(XLIST_NAME *ls, XLIST_T elm)
+{
+    XLIST_T *ptr = xlist_put_uninit(ls);
+    *ptr = elm;
+    return ptr;
+}
+
 XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
 {
     *elm = XLIST_SENTINEL;
@@ -220,7 +228,7 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         end++;
     }
     
-    XListBucket *bp = (XListBucket*) end->XLIST_PTR_FIELD;
+    xlist_bucket_t *bp = (xlist_bucket_t*) end->XLIST_PTR_FIELD;
     size_t deleted_index = elm - bp->elms;
     if(deleted_index == 0)
     {
@@ -269,9 +277,9 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         }
         
         // this will be bp->next
-        XListBucket *new_bucket = malloc(sizeof(XListBucket));
+        xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
         
-        XListBucket *old_next = bp->next;
+        xlist_bucket_t *old_next = bp->next;
         bp->next = new_bucket;
         new_bucket->next = old_next;
         new_bucket->prev = bp;
@@ -307,14 +315,25 @@ void xlist_deinit(XLIST_NAME *ls)
     free(ls->not_full_buckets);
 }
 
-XListIterator xlist_begin(XLIST_NAME *ls)
+xlist_iter_t xlist_begin(XLIST_NAME *ls)
 {
-    return (XListIterator){ls->head->elms};
+    return (xlist_iter_t){ls->head->elms};
 }
 
-XListIterator xlist_end(XLIST_NAME *ls)
+xlist_iter_t xlist_end(XLIST_NAME *ls)
 {
-    return (XListIterator){ls->end_sentinel->elms};
+    return (xlist_iter_t){ls->end_sentinel->elms};
+}
+
+xlist_iter_t xlist_iter_next(xlist_iter_t it)
+{
+    it.ptr += 1;
+    if(XLIST_IS_SENTINEL(it.ptr))
+    {
+        xlist_bucket_t *bucket = it.ptr->XLIST_PTR_FIELD;
+        return (xlist_iter_t){.ptr = bucket->next->elms};
+    }
+    return it;
 }
 
 #endif
