@@ -364,7 +364,14 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         new_bucket->prev = bp;
         old_next->prev = new_bucket;
         
+        new_bucket->bridge_next = bp->bridge_next;
+        bp->bridge_next = new_bucket;
+        new_bucket->bridge_prev = bp;
+        
         new_bucket->elms = elm + 1;
+        
+        XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
+        ls->buckets_with_prev_bridges.array[ls->buckets_with_prev_bridges.count++] = new_bucket;
         
         // let's say old_cap is 8, deleted index is 2
         // that means new_bucket will be starting at 3 through 8, so 0->5 so cap=5
