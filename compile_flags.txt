@@ -4,5 +4,6 @@
 -DXLIST_IMPL
 -DXLIST_MAKE_SENTINEL(a)=((a)->k = -1)
 -DXLIST_IS_SENTINEL(a)=(a->k == -1)
--DXLIST_PTR_FIELD=p
+-DXLIST_SENTINEL_SET_PTR(a, pp)=((a)->p=(void*)pp)
+-DXLIST_SENTINEL_GET_PTR(a)=((a)->p)
 -isystemC:/Users/PCD/Downloads/w64devkit/include

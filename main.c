@@ -7,14 +7,23 @@ typedef struct S
 
 #include <stdio.h>
 
+// undefs just for lsp
+#undef XLIST_T
+#undef XLIST_NAME
+#undef XLIST_MAKE_SENTINEL
+#undef XLIST_IS_SENTINEL
+#undef XLIST_SENTINEL_SET_PTR
+#undef XLIST_SENTINEL_GET_PTR
+#undef XLIST_IMPL
+
 #define XLIST_T S
 #define XLIST_NAME ss
 #define XLIST_MAKE_SENTINEL(a) ((a)->k = -1)
 #define XLIST_IS_SENTINEL(a) ((a)->k == -1)
-#define XLIST_PTR_FIELD p
+#define XLIST_SENTINEL_SET_PTR(a,pp) ((a)->p=(void*)pp)
+#define XLIST_SENTINEL_GET_PTR(a) (a->p)
 #define XLIST_IMPL
 #include "xlist.h"
-
 
 int main()
 {

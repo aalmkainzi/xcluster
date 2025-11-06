@@ -17,8 +17,8 @@ but how will iterators be stable? and what about it_next()?
 #include <string.h>
 #include <assert.h>
 
-#if !defined(XLIST_T) || !defined(XLIST_NAME) || !defined(XLIST_MAKE_SENTINEL) || !defined(XLIST_IS_SENTINEL) || !defined(XLIST_PTR_FIELD)
-    #error "Must define XLIST_T, XLIST_NAME, XLIST_MAKE_SENTINEL, and XLIST_IS_SENTINEL"
+#if !defined(XLIST_T) || !defined(XLIST_NAME) || !defined(XLIST_MAKE_SENTINEL) || !defined(XLIST_IS_SENTINEL) || !defined(XLIST_SENTINEL_GET_PTR) || !defined(XLIST_SENTINEL_SET_PTR)
+    #error "Must define XLIST_T, XLIST_NAME, XLIST_MAKE_SENTINEL, XLIST_IS_SENTINEL, XLIST_SENTINEL_GET_PTR, and XLIST_SENTINEL_SET_PTR"
 #endif
 
 #define XLIST_CAT_(a, b) a##b
@@ -130,10 +130,13 @@ do                                                                         \
 #define XLIST_POP(s) \
 ((s).array[--(s).count])
 
-void xlist_assign_sentinel(XLIST_T *ptr, xlist_bucket_t *bucket)
+#define XLIST_PUSH(s, x) \
+((s).array[(s).count++] = (x))
+
+void xlist_assign_sentinel(XLIST_T *elm, xlist_bucket_t *bucket)
 {
-    XLIST_MAKE_SENTINEL((ptr));
-    ptr->XLIST_PTR_FIELD = (void*) bucket;
+    XLIST_MAKE_SENTINEL((elm));
+    XLIST_SENTINEL_SET_PTR(elm, bucket);
 }
 
 void xlist_init(XLIST_NAME *ls)
@@ -174,9 +177,9 @@ void xlist_push_not_full_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
     assert(b->not_full_index == (size_t)-1);
     
     XLIST_MAYBE_GROW(ls->not_full_buckets);
-    ls->not_full_buckets.array[ls->not_full_buckets.count] = b;
-    b->not_full_index = ls->not_full_buckets.count;
-    ls->not_full_buckets.count += 1;
+    XLIST_PUSH(ls->not_full_buckets, b);
+    
+    b->not_full_index = ls->not_full_buckets.count - 1;
 }
 
 void xlist_unlink_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
@@ -201,6 +204,8 @@ void xlist_unlink_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
         b->prev->next = b->next;
         b->next->prev = b->prev;
     }
+    
+    b->next = b->prev = NULL;
 }
 
 XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
@@ -239,7 +244,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
         
         prev->count += 1 + bucket->count;
         
-        bucket->elms[bucket->count].XLIST_PTR_FIELD = (void*) prev;
+        XLIST_SENTINEL_SET_PTR(&bucket->elms[bucket->count], prev);
         
         prev->bridge_next = bucket->bridge_next;
         if(prev->bridge_next != NULL)
@@ -255,7 +260,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     XLIST_MAYBE_GROW(ls->allocations, 2);
     
     xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
-    ls->allocations.array[ls->allocations.count++] = new_bucket;
+    XLIST_PUSH(ls->allocations, new_bucket);
     
     memset(new_bucket, 0, sizeof(xlist_bucket_t));
     new_bucket->not_full_index = (size_t)-1;
@@ -263,7 +268,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     ls->prev_cap *= 2;
     
     new_bucket->elms = malloc(sizeof(XLIST_T) * (new_bucket->cap + 1));
-    ls->allocations.array[ls->allocations.count++] = new_bucket->elms;
+    XLIST_PUSH(ls->allocations, new_bucket->elms);
     
     XLIST_T *elm = &new_bucket->elms[0];
     
@@ -305,39 +310,29 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         end++;
     }
     
-    xlist_bucket_t *bp = (xlist_bucket_t*) end->XLIST_PTR_FIELD;
+    xlist_bucket_t *bp = (xlist_bucket_t*) XLIST_SENTINEL_GET_PTR(end);
     size_t deleted_index = elm - bp->elms;
     if(deleted_index == 0)
     {
-        // just shift the elms by 1
-        XLIST_T *ret = &bp->elms[1];
-        bp->elms += 1;
-        bp->count -= 1;
-        bp->cap -= 1;
-        return ret;
+        // current bucket has 0 elms, unlink it from the chain, but keep its as a bridge_prev for the new node
         
-        // TODO we need some mechanism to reuse the deleted slot...
-        // maybe the planned bridge mechanism can also handle this
-        // case by having NULL ptr for prev bucket.
-        // Another problem is bridges next to each other...
+        xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
+        XLIST_MAYBE_GROW(ls->allocations);
+        XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
         
-        // hmmm maybe we shouldn't shift the elms like that, instead
-        // create a new bucket with size and cap 0, don't link it with the others,
-        // just store it for the bridge mechanism to work properly
+        XLIST_PUSH(ls->allocations, new_bucket);
         
-        // TODO also handle if count is now 0,
-        // you don't want it linked to the other buckets if its empty
+        new_bucket->elms = bp->elms + 1;
+        new_bucket->count = bp->count - 1;
+        new_bucket->cap = bp->cap - 1;
+        
+        new_bucket->not_full_index = (size_t)-1;
+        
+        new_bucket->elms = bp->elms + 1;
     }
     else if(deleted_index == bp->count - 1)
     {
-        // TODO same thing
-        // we shouldnt do it
-        // instead should split into new bucket to the right, with cap and count 0, but unlink it from this bucket
-        // will only be used as a bridge in case a new element will be inserted, so the slot can be reused
-        // remember, merging two nodes makes the total cap = cap1+cap2+1 because we need one less sentinel
-        bp->count -= 1;
-        xlist_assign_sentinel(&bp->elms[bp->count], bp);
-        return bp->next->elms;
+        
     }
     else
     {
@@ -349,11 +344,6 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         
         bp->count = deleted_index;
         bp->cap = bp->count;
-        
-        if(bp->not_full_index != (size_t)-1)
-        {
-            xlist_erase_not_full_bucket(ls, bp);
-        }
         
         // this will be bp->next
         xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
@@ -370,8 +360,18 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         
         new_bucket->elms = elm + 1;
         
+        if(bp->not_full_index != (size_t)-1)
+        {
+            size_t not_full_index = bp->not_full_index;
+            bp->not_full_index = (size_t)-1;
+            
+            new_bucket->not_full_index = not_full_index;
+            
+            ls->not_full_buckets.array[not_full_index] = new_bucket;
+        }
+        
         XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
-        ls->buckets_with_prev_bridges.array[ls->buckets_with_prev_bridges.count++] = new_bucket;
+        XLIST_PUSH(ls->buckets_with_prev_bridges, new_bucket);
         
         // let's say old_cap is 8, deleted index is 2
         // that means new_bucket will be starting at 3 through 8, so 0->5 so cap=5
@@ -381,10 +381,6 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         // new_bucket count is 3
         new_bucket->cap   = old_cap   - deleted_index - 1;
         new_bucket->count = old_count - deleted_index - 1;
-        if(new_bucket->cap > new_bucket->count)
-        {
-            xlist_push_not_full_bucket(ls, new_bucket);
-        }
         
         xlist_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
@@ -419,7 +415,7 @@ xlist_iter_t xlist_iter_next(xlist_iter_t it)
     it.ptr += 1;
     if(XLIST_IS_SENTINEL(it.ptr))
     {
-        xlist_bucket_t *bucket = it.ptr->XLIST_PTR_FIELD;
+        xlist_bucket_t *bucket = (xlist_bucket_t*) XLIST_SENTINEL_GET_PTR(it.ptr);
         return (xlist_iter_t){.ptr = bucket->next->elms};
     }
     return it;
