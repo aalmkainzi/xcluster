@@ -114,6 +114,7 @@ typedef struct xlist_iter_t
 #define xlist_erase_not_full_bucket XLIST_CAT(XLIST_NAME, _erase_not_full_bucket)
 #define xlist_push_not_full_bucket  XLIST_CAT(XLIST_NAME, _push_not_full_bucket)
 #define xlist_assign_sentinel       XLIST_CAT(XLIST_NAME, _assign_sentinel)
+#define xlist_unlink_bucket         XLIST_CAT(XLIST_NAME, _unlink_bucket)
 
 #define XLIST_MAYBE_GROW(s, ...)                                           \
 do                                                                         \
@@ -178,6 +179,30 @@ void xlist_push_not_full_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
     ls->not_full_buckets.count += 1;
 }
 
+void xlist_unlink_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
+{
+    if(b == ls->head)
+    {
+        ls->head = ls->head->next;
+        ls->head->prev = NULL;
+        if(b == ls->tail)
+        {
+            ls->tail = ls->end_sentinel;
+        }
+    }
+    else if(b == ls->tail)
+    {
+        ls->tail = ls->tail->prev;
+        ls->tail->next = ls->end_sentinel;
+        ls->end_sentinel->prev = ls->tail;
+    }
+    else
+    {
+        b->prev->next = b->next;
+        b->next->prev = b->prev;
+    }
+}
+
 XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
 {
     if(ls->not_full_buckets.count != 0)
@@ -222,7 +247,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
             prev->bridge_next->bridge_prev = prev;
         }
         
-        // TODO del bucket by linking its neighbors
+        xlist_unlink_bucket(ls, bucket);
         
         return ret;
     }
