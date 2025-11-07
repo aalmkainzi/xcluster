@@ -116,15 +116,15 @@ typedef struct xlist_iter_t
 #define xlist_assign_sentinel       XLIST_CAT(XLIST_NAME, _assign_sentinel)
 #define xlist_unlink_bucket         XLIST_CAT(XLIST_NAME, _unlink_bucket)
 
-#define XLIST_MAYBE_GROW(s, ...)                                           \
-do                                                                         \
-{                                                                          \
-    const size_t _n = 0 __VA_OPT__(+1) ? 0 __VA_OPT__(+(__VA_ARGS__)) : 1; \
-    if(((s).count + _n - 1) >= (s).cap)                                    \
-    {                                                                      \
-        (s).cap = ((s).cap + (_n - 1)) * 2;                                \
-        (s).array = realloc((s).array, (s).cap * sizeof(*((s).array)));    \
-    }                                                                      \
+#define XLIST_MAYBE_GROW(s, ...)                                        \
+do                                                                      \
+{                                                                       \
+    const size_t _n = (__VA_ARGS__ +0) ? (__VA_ARGS__ +0) : 1;          \
+    if(((s).count + _n - 1) >= (s).cap)                                 \
+    {                                                                   \
+        (s).cap = ((s).cap + (_n - 1)) * 2;                             \
+        (s).array = realloc((s).array, (s).cap * sizeof(*((s).array))); \
+    }                                                                   \
 } while(0)
 
 #define XLIST_POP(s) \
@@ -236,6 +236,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
         
         // it is guaranteed they are both full,
         // otherwise the previous branch would have returned
+        assert(prev != NULL);
         assert(prev->count == prev->cap);
         assert(bucket->count == bucket->cap);
         
@@ -250,6 +251,21 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
         if(prev->bridge_next != NULL)
         {
             prev->bridge_next->bridge_prev = prev;
+        }
+        
+        if(bucket->next != NULL) // reuse bucket's links
+        {
+            prev->next = bucket->next;
+            prev->prev = bucket->prev;
+        }
+        else
+        {
+            // TODO tail may be end_sentinel
+            ls->tail->next = prev;
+            prev->prev = ls->tail;
+            ls->tail = prev;
+            ls->tail->next = ls->end_sentinel;
+            ls->end_sentinel->prev = ls->tail;
         }
         
         xlist_unlink_bucket(ls, bucket);
@@ -312,76 +328,152 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
     
     xlist_bucket_t *bp = (xlist_bucket_t*) XLIST_SENTINEL_GET_PTR(end);
     size_t deleted_index = elm - bp->elms;
+    
+    xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
+    memset(new_bucket, 0, sizeof(xlist_bucket_t));
+    
     if(deleted_index == 0)
     {
         // current bucket has 0 elms, unlink it from the chain, but keep its as a bridge_prev for the new node
         
-        xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
         XLIST_MAYBE_GROW(ls->allocations);
-        XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
-        
         XLIST_PUSH(ls->allocations, new_bucket);
         
         new_bucket->elms = bp->elms + 1;
         new_bucket->count = bp->count - 1;
         new_bucket->cap = bp->cap - 1;
         
-        new_bucket->not_full_index = (size_t)-1;
-        
-        new_bucket->elms = bp->elms + 1;
-    }
-    else if(deleted_index == bp->count - 1)
-    {
-        
-    }
-    else
-    {
-        // split into new bucket
-        xlist_assign_sentinel(elm, bp);
-        
-        size_t old_count = bp->count;
-        size_t old_cap = bp->cap;
-        
-        bp->count = deleted_index;
-        bp->cap = bp->count;
-        
-        // this will be bp->next
-        xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
-        
-        xlist_bucket_t *old_next = bp->next;
-        bp->next = new_bucket;
-        new_bucket->next = old_next;
-        new_bucket->prev = bp;
-        old_next->prev = new_bucket;
-        
-        new_bucket->bridge_next = bp->bridge_next;
-        bp->bridge_next = new_bucket;
-        new_bucket->bridge_prev = bp;
-        
-        new_bucket->elms = elm + 1;
+        bp->count = 0;
+        bp->cap = 0;
         
         if(bp->not_full_index != (size_t)-1)
         {
-            size_t not_full_index = bp->not_full_index;
+            new_bucket->not_full_index = bp->not_full_index;
+            ls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
             bp->not_full_index = (size_t)-1;
-            
-            new_bucket->not_full_index = not_full_index;
-            
-            ls->not_full_buckets.array[not_full_index] = new_bucket;
         }
+        
+        new_bucket->bridge_prev = bp;
+        new_bucket->bridge_next = bp->bridge_next;
+        bp->bridge_next = new_bucket;
+        
+        if(new_bucket->bridge_next != NULL)
+        {
+            new_bucket->bridge_next->bridge_prev = new_bucket;
+        }
+        
+        XLIST_T *ret = NULL;
+        if(new_bucket->count != 0)
+        {
+            new_bucket->next = bp->next;
+            new_bucket->prev = bp->prev;
+            
+            new_bucket->next->prev = new_bucket; // always exists
+            
+            if(new_bucket->prev != NULL)
+            {
+                new_bucket->prev->next = new_bucket;
+            }
+            
+            ret = new_bucket->elms;
+        }
+        else
+        {
+            ret = bp->next->elms;
+        }
+        
+        xlist_unlink_bucket(ls, bp);
         
         XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
         XLIST_PUSH(ls->buckets_with_prev_bridges, new_bucket);
         
+        assert(
+            XLIST_SENTINEL_GET_PTR(&new_bucket->elms[new_bucket->count]) == bp
+        );
+        
+        xlist_assign_sentinel(elm, bp);
+        xlist_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
+        
+        return ret;
+    }
+    else if(deleted_index == bp->count - 1)
+    {
+        new_bucket->elms = bp->elms + 1;
+        
+        new_bucket->count = 0;
+        new_bucket->cap = bp->cap - deleted_index - 1;
+        
+        bp->count -= 1;
+        bp->cap = bp->count;
+        
+        new_bucket->bridge_prev = bp;
+        new_bucket->bridge_next = bp->bridge_next;
+        
+        if(new_bucket->bridge_next != NULL)
+        {
+            new_bucket->bridge_next->bridge_prev = new_bucket;
+        }
+        
+        if(bp->not_full_index != (size_t)-1)
+        {
+            new_bucket->not_full_index = bp->not_full_index;
+            ls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
+            bp->not_full_index = (size_t)-1;
+        }
+        
+        bp->bridge_next = new_bucket;
+        
+        XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
+        XLIST_PUSH(ls->buckets_with_prev_bridges, new_bucket);
+        
+        xlist_assign_sentinel(elm, bp);
+        xlist_assign_sentinel(&new_bucket->elms[0], new_bucket);
+        
+        return bp->next->elms;
+    }
+    else
+    {
         // let's say old_cap is 8, deleted index is 2
         // that means new_bucket will be starting at 3 through 8, so 0->5 so cap=5
         // let's say old_count is 6
         // new count is 2
         // new cap is 2
         // new_bucket count is 3
-        new_bucket->cap   = old_cap   - deleted_index - 1;
-        new_bucket->count = old_count - deleted_index - 1;
+        new_bucket->count = bp->count - deleted_index - 1;
+        new_bucket->cap   = bp->cap   - deleted_index - 1;
         
+        bp->count = deleted_index;
+        bp->cap = bp->count;
+        
+        new_bucket->next = bp->next;
+        new_bucket->prev = bp;
+        new_bucket->next->prev = new_bucket;
+        new_bucket->prev->next = new_bucket;
+        
+        new_bucket->bridge_next = bp->bridge_next;
+        bp->bridge_next = new_bucket;
+        new_bucket->bridge_prev = bp;
+        
+        if(new_bucket->bridge_next != NULL)
+        {
+            new_bucket->bridge_next->bridge_prev = new_bucket;
+        }
+        
+        new_bucket->elms = bp->elms + 1;
+        
+        // TODO this piece of code is repeated 2 times so far, refactor
+        // lots of common code between these 3 branches
+        if(bp->not_full_index != (size_t)-1)
+        {
+            new_bucket->not_full_index = bp->not_full_index;
+            ls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
+            bp->not_full_index = (size_t)-1;
+        }
+        
+        XLIST_MAYBE_GROW(ls->buckets_with_prev_bridges);
+        XLIST_PUSH(ls->buckets_with_prev_bridges, new_bucket);
+        
+        xlist_assign_sentinel(elm, bp);
         xlist_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
         return new_bucket->elms;
