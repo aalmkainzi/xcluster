@@ -32,7 +32,7 @@ but how will iterators be stable? and what about it_next()?
 #define xcluster_deinit     XCLUSTER_CAT(XCLUSTER_NAME, _deinit)
 #define xcluster_begin      XCLUSTER_CAT(XCLUSTER_NAME, _begin)
 #define xcluster_end        XCLUSTER_CAT(XCLUSTER_NAME, _end)
-#define xcluster_next  XCLUSTER_CAT(XCLUSTER_NAME, _next)
+#define xcluster_next       XCLUSTER_CAT(XCLUSTER_NAME, _next)
 
 typedef struct XCLUSTER_NAME
 {
@@ -92,10 +92,16 @@ typedef struct xcluster_bucket_t
     size_t cap;
 } xcluster_bucket_t;
 
+#ifdef XCLUSTER_DEBUG
+    #define xcluster_validate XCLUSTER_CAT(XCLUSTER_NAME, _validate)
+    bool xcluster_validate(XCLUSTER_NAME *cls);
+#endif
+
 #define xcluster_erase_not_full_bucket XCLUSTER_CAT(XCLUSTER_NAME, _erase_not_full_bucket)
 #define xcluster_push_not_full_bucket  XCLUSTER_CAT(XCLUSTER_NAME, _push_not_full_bucket)
 #define xcluster_assign_sentinel       XCLUSTER_CAT(XCLUSTER_NAME, _assign_sentinel)
 #define xcluster_unlink_bucket         XCLUSTER_CAT(XCLUSTER_NAME, _unlink_bucket)
+#define xcluster_steal_node_links      XCLUSTER_CAT(XCLUSTER_NAME, _steal_node_links)
 
 #if defined(__cplusplus) && defined(_MSC_VER)
     #define XCLUSTER_TYPEOF decltype
@@ -190,13 +196,37 @@ void xcluster_unlink_bucket(XCLUSTER_NAME *cls, xcluster_bucket_t *b)
         cls->tail->next = cls->end_sentinel;
         cls->end_sentinel->prev = cls->tail;
     }
-    else if(b->next != NULL)
+    else
     {
         b->prev->next = b->next;
         b->next->prev = b->prev;
     }
     
     b->next = b->prev = NULL;
+}
+
+void xcluster_steal_node_links(XCLUSTER_NAME *cls, xcluster_bucket_t *old_node, xcluster_bucket_t *new_node)
+{
+    new_node->next = old_node->next;
+    new_node->prev = old_node->prev;
+    
+    new_node->next->prev = new_node;
+    
+    if(new_node->prev != NULL)
+    {
+        new_node->prev->next = new_node;
+    }
+    
+    if(old_node == cls->head)
+    {
+        cls->head = new_node;
+    }
+    if(old_node == cls->tail)
+    {
+        cls->tail = new_node;
+    }
+    
+    old_node->next = old_node->prev = NULL;
 }
 
 // this function shouldn't exist for this data structure
@@ -208,6 +238,10 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
         cls->count++;
         
         xcluster_bucket_t *bucket = cls->not_full_buckets.array[cls->not_full_buckets.count - 1];
+        
+        assert(bucket->next != NULL);
+        assert(bucket == cls->head || bucket->prev != NULL);
+        
         XCLUSTER_T *ret = &bucket->elms[bucket->count];
         bucket->count++;
         
@@ -220,6 +254,8 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
         }
         
         memcpy(ret, new_elm, sizeof(XCLUSTER_T));
+        
+        xcluster_validate(cls);
         return ret;
     }
     if(cls->buckets_with_prev_bridges.count != 0)
@@ -254,8 +290,7 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
         {
             if(bucket->next != NULL) // reuse bucket's links
             {
-                prev->next = bucket->next;
-                prev->prev = bucket->prev;
+                xcluster_steal_node_links(cls, bucket, prev);
             }
             else
             {
@@ -275,15 +310,19 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
                 }
             }
         }
+        else if(bucket->next != NULL)
+        {
+            xcluster_unlink_bucket(cls, bucket);
+        }
         
         if(prev->count < prev->cap)
         {
             xcluster_push_not_full_bucket(cls, prev);
         }
         
-        xcluster_unlink_bucket(cls, bucket);
-        
         memcpy(ret, new_elm, sizeof(XCLUSTER_T));
+        
+        xcluster_validate(cls);
         return ret;
     }
     
@@ -323,6 +362,8 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
     cls->count += 1;
     
     memcpy(ret, new_elm, sizeof(XCLUSTER_T));
+    
+    xcluster_validate(cls);
     return ret;
 }
 
@@ -337,13 +378,13 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
 {
     cls->count -= 1;
     
-    XCLUSTER_T *end = elm;
-    while(!XCLUSTER_IS_SENTINEL(end))
+    xcluster_bucket_t *bp = cls->head;
+    
+    while( !(elm >= bp->elms && elm < bp->elms + bp->count) )
     {
-        end++;
+        bp = bp->next;
     }
     
-    xcluster_bucket_t *bp = (xcluster_bucket_t*) XCLUSTER_SENTINEL_GET_PTR((end));
     size_t deleted_index = elm - bp->elms;
     
     xcluster_bucket_t *new_bucket = (xcluster_bucket_t*) malloc(sizeof(xcluster_bucket_t));
@@ -352,6 +393,9 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
     
     XCLUSTER_MAYBE_GROW(cls->allocations);
     XCLUSTER_PUSH(cls->allocations, new_bucket);
+    
+    // TODO handle cases of not_full_buckets
+    // if a node is no longer linked, it should be (size_t)-1
     
     if(deleted_index == 0)
     {
@@ -366,10 +410,18 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         
         if(bp->not_full_index != (size_t)-1)
         {
-            new_bucket->not_full_index = bp->not_full_index;
-            cls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
-            bp->not_full_index = (size_t)-1;
+            if(new_bucket->count != 0)
+            {
+                new_bucket->not_full_index = bp->not_full_index;
+                cls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
+            }
+            else
+            {
+                xcluster_erase_not_full_bucket(cls, bp);
+            }
         }
+        
+        bp->not_full_index = (size_t)-1;
         
         new_bucket->bridge_prev = bp;
         new_bucket->bridge_next = bp->bridge_next;
@@ -383,24 +435,15 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         XCLUSTER_T *ret = NULL;
         if(new_bucket->count != 0)
         {
-            new_bucket->next = bp->next;
-            new_bucket->prev = bp->prev;
-            
-            new_bucket->next->prev = new_bucket; // always exists
-            
-            if(new_bucket->prev != NULL)
-            {
-                new_bucket->prev->next = new_bucket;
-            }
+            xcluster_steal_node_links(cls, bp, new_bucket);
             
             ret = new_bucket->elms;
         }
         else
         {
             ret = bp->next->elms;
+            xcluster_unlink_bucket(cls, bp);
         }
-        
-        xcluster_unlink_bucket(cls, bp);
         
         XCLUSTER_MAYBE_GROW(cls->buckets_with_prev_bridges);
         XCLUSTER_PUSH(cls->buckets_with_prev_bridges, new_bucket);
@@ -412,6 +455,9 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         xcluster_assign_sentinel(elm, bp);
         xcluster_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
+#ifdef XCLUSTER_DEBUG
+        xcluster_validate(cls); // error found in this branch
+#endif
         return ret;
     }
     else if(deleted_index == bp->count - 1)
@@ -432,22 +478,10 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
             new_bucket->bridge_next->bridge_prev = new_bucket;
         }
         
-        // if(new_bucket->cap > 0)
-        // {
-        //     if(bp->not_full_index != (size_t)-1)
-        //     {
-        //         new_bucket->not_full_index = bp->not_full_index;
-        //         cls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
-        //     }
-        //     else
-        //     {
-        //         XCLUSTER_MAYBE_GROW(cls->not_full_buckets);
-        //         xcluster_push_not_full_bucket(cls, new_bucket);
-        //     }
-        // }
-        
         if(bp->not_full_index != (size_t)-1)
+        {
             xcluster_erase_not_full_bucket(cls, bp);
+        }
         
         bp->bridge_next = new_bucket;
         
@@ -457,6 +491,9 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         xcluster_assign_sentinel(elm, bp);
         xcluster_assign_sentinel(&new_bucket->elms[0], new_bucket);
         
+#ifdef XCLUSTER_DEBUG
+        xcluster_validate(cls);
+#endif
         return bp->next->elms;
     }
     else
@@ -477,6 +514,11 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         new_bucket->prev = bp;
         new_bucket->next->prev = new_bucket;
         new_bucket->prev->next = new_bucket;
+        
+        if(bp == cls->tail)
+        {
+            cls->tail = new_bucket;
+        }
         
         new_bucket->bridge_next = bp->bridge_next;
         bp->bridge_next = new_bucket;
@@ -504,6 +546,9 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         xcluster_assign_sentinel(elm, bp);
         xcluster_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
+#ifdef XCLUSTER_DEBUG
+        xcluster_validate(cls);
+#endif
         return new_bucket->elms;
     }
 }
@@ -541,10 +586,51 @@ XCLUSTER_T *xcluster_next(XCLUSTER_T *it)
     return it;
 }
 
+bool xcluster_validate(XCLUSTER_NAME *cls)
+{
+    xcluster_bucket_t *b = cls->head;
+    xcluster_bucket_t *prev = NULL;
+    size_t accum = 0;
+    while(b != cls->end_sentinel)
+    {
+        accum += b->count;
+        
+        for(size_t i = 0 ; i < b->count ; i++)
+        {
+            assert(!XCLUSTER_IS_SENTINEL((&b->elms[i])));
+        }
+        assert(XCLUSTER_IS_SENTINEL((&b->elms[b->count])));
+        xcluster_bucket_t *bb = (xcluster_bucket_t*) XCLUSTER_SENTINEL_GET_PTR((&b->elms[b->count]));
+        assert(bb == b);
+        
+        assert(b->prev == prev);
+        
+        prev = b;
+        b = b->next;
+        
+        assert(b != NULL);
+    }
+    
+    for(size_t i = 0 ; i < cls->not_full_buckets.count ; i++)
+    {
+        xcluster_bucket_t *b = cls->not_full_buckets.array[i];
+        assert(b->cap > b->count);
+        assert(b->count > 0);
+        assert(b->not_full_index == i);
+        assert(b->next != NULL);
+        assert(b == cls->head || b->prev != NULL);
+    }
+    
+    assert(accum == cls->count);
+    return true;
+}
+
 #endif
 
 #undef XCLUSTER_CAT_
 #undef XCLUSTER_CAT
+
+#undef XCLUSTER_TYPEOF
 
 #undef xcluster_bucket_t
 
@@ -561,6 +647,8 @@ XCLUSTER_T *xcluster_next(XCLUSTER_T *it)
 #undef xcluster_push_not_full_bucket
 #undef xcluster_assign_sentinel
 #undef xcluster_unlink_bucket
+#undef xcluster_steal_node_links
+#undef xcluster_validate
 
 #undef XCLUSTER_PUSH
 #undef XCLUSTER_POP

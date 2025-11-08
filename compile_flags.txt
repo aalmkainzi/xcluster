@@ -1,9 +1,9 @@
 -std=c23
--DXLIST_T=struct S{void*p;int k;}
--DXLIST_NAME=SXList
--DXLIST_IMPL
--DXLIST_MAKE_SENTINEL(a)=((a)->k = -1)
--DXLIST_IS_SENTINEL(a)=(a->k == -1)
--DXLIST_SENTINEL_SET_PTR(a, pp)=((a)->p=(void*)pp)
--DXLIST_SENTINEL_GET_PTR(a)=((a)->p)
--isystemC:/Users/PCD/Downloads/w64devkit/include
+-DXCLUSTER_T=struct S{int k;void *p;}
+-DXCLUSTER_NAME=ss
+-DXCLUSTER_MAKE_SENTINEL(a)=((a)->k = -1)
+-DXCLUSTER_IS_SENTINEL(a)=((a)->k == -1)
+-DXCLUSTER_SENTINEL_SET_PTR(a,pp)=((a)->p = (void*)(pp))
+-DXCLUSTER_SENTINEL_GET_PTR(a)=((a)->p)
+-DXCLUSTER_IMPL
+-DXCLUSTER_DEBUG
