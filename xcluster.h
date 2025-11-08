@@ -153,7 +153,7 @@ void xcluster_init(XCLUSTER_NAME *cls)
     cls->buckets_with_prev_bridges.cap = 16;
     cls->buckets_with_prev_bridges.array = (xcluster_bucket_t**) malloc(sizeof(xcluster_bucket_t*) * cls->buckets_with_prev_bridges.cap);
     
-    cls->prev_cap = 64;
+    cls->prev_cap = 2048;
 }
 
 void xcluster_erase_not_full_bucket(XCLUSTER_NAME *cls, xcluster_bucket_t *b)
@@ -254,8 +254,9 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
         }
         
         memcpy(ret, new_elm, sizeof(XCLUSTER_T));
-        
+#ifdef XCLUSTER_DEBUG
         xcluster_validate(cls);
+#endif
         return ret;
     }
     if(cls->buckets_with_prev_bridges.count != 0)
@@ -321,8 +322,9 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
         }
         
         memcpy(ret, new_elm, sizeof(XCLUSTER_T));
-        
+#ifdef XCLUSTER_DEBUG
         xcluster_validate(cls);
+#endif
         return ret;
     }
     
@@ -362,8 +364,9 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
     cls->count += 1;
     
     memcpy(ret, new_elm, sizeof(XCLUSTER_T));
-    
+#ifdef XCLUSTER_DEBUG
     xcluster_validate(cls);
+#endif
     return ret;
 }
 
