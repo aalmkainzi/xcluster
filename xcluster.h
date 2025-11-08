@@ -381,12 +381,13 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
 {
     cls->count -= 1;
     
-    xcluster_bucket_t *bp = cls->head;
-    
-    while( !(elm >= bp->elms && elm < bp->elms + bp->count) )
+    XCLUSTER_T *end = elm;
+    while( !XCLUSTER_IS_SENTINEL(end) )
     {
-        bp = bp->next;
+        end += 1;
     }
+    
+    xcluster_bucket_t *bp = (xcluster_bucket_t*) XCLUSTER_SENTINEL_GET_PTR(end);
     
     size_t deleted_index = elm - bp->elms;
     

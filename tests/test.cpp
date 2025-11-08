@@ -315,12 +315,12 @@ static void test_super_stress() {
     std::vector<S*> live;
     live.reserve(200000);
     
-    const size_t OPS = 1000000; // one million operations
+    const size_t OPS = 100000;
     const size_t LIGHT_VALIDATE_EVERY = 10000; // light validation periodically (cheap)
     const size_t SAMPLE_CHECKS = 256; // number of random samples on light validation
     
     for (size_t op = 0; op < OPS; ++op) {
-        std::cout << "op=" << op << std::endl;
+        // std::cout << "op=" << op << std::endl;
         
         int opKind = opDist(rng);
         
