@@ -30,7 +30,7 @@ int main()
     ss a;
     ss_init(&a);
     
-    for(int i = 0 ; i < 1000 ; i++)
+    for(int i = 0 ; i < 500 ; i++)
     {
         S* s = ss_put(&a, (S){.k = i + 1});
         if(i == 64)

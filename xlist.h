@@ -28,7 +28,7 @@ but how will iterators be stable? and what about it_next()?
 #define xlist_iter_t     XLIST_CAT(XLIST_NAME, _iter_t)
 
 #define xlist_init       XLIST_CAT(XLIST_NAME, _init)
-#define xlist_put_uninit XLIST_CAT(XLIST_NAME, _put_uninit)
+#define xlist_put_ptr XLIST_CAT(XLIST_NAME, _put_ptr)
 #define xlist_put        XLIST_CAT(XLIST_NAME, _put)
 #define xlist_del        XLIST_CAT(XLIST_NAME, _del)
 #define xlist_deinit     XLIST_CAT(XLIST_NAME, _deinit)
@@ -156,6 +156,9 @@ void xlist_init(XLIST_NAME *ls)
     ls->allocations.cap = 16;
     ls->allocations.array = malloc(sizeof(void*) * ls->allocations.cap);
     
+    ls->buckets_with_prev_bridges.cap = 16;
+    ls->buckets_with_prev_bridges.array = malloc(sizeof(xlist_bucket_t*) * ls->buckets_with_prev_bridges.cap);
+    
     ls->prev_cap = 64;
 }
 
@@ -199,7 +202,7 @@ void xlist_unlink_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
         ls->tail->next = ls->end_sentinel;
         ls->end_sentinel->prev = ls->tail;
     }
-    else
+    else if(b->next != NULL)
     {
         b->prev->next = b->next;
         b->next->prev = b->prev;
@@ -208,14 +211,16 @@ void xlist_unlink_bucket(XLIST_NAME *ls, xlist_bucket_t *b)
     b->next = b->prev = NULL;
 }
 
-XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
+// this function shouldn't exist for this data structure
+// because we're dealing with sentinels, user must initailize on put
+XLIST_T *xlist_put_ptr(XLIST_NAME *ls, const XLIST_T *new_elm)
 {
     if(ls->not_full_buckets.count != 0)
     {
         ls->count++;
         
         xlist_bucket_t *bucket = ls->not_full_buckets.array[ls->not_full_buckets.count - 1];
-        XLIST_T *elm = &bucket->elms[bucket->count];
+        XLIST_T *ret = &bucket->elms[bucket->count];
         bucket->count++;
         
         xlist_assign_sentinel(&bucket->elms[bucket->count], bucket);
@@ -226,7 +231,8 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
             ls->not_full_buckets.count -= 1;
         }
         
-        return elm;
+        memcpy(ret, new_elm, sizeof(XLIST_T));
+        return ret;
     }
     if(ls->buckets_with_prev_bridges.count != 0)
     {
@@ -234,18 +240,19 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
         
         xlist_bucket_t *prev = bucket->bridge_prev;
         
-        // it is guaranteed they are both full,
-        // otherwise the previous branch would have returned
+        // they may be empty and unlinked, or full
         assert(prev != NULL);
-        assert(prev->count == prev->cap);
-        assert(bucket->count == bucket->cap);
+        assert(prev->count == prev->cap || prev->count == 0);
+        assert(bucket->count == bucket->cap || bucket->count == 0);
+        assert((prev->elms + prev->cap + 1) == bucket->elms);
         
         prev->cap = prev->cap + bucket->cap + 1;
         XLIST_T *ret = &prev->elms[prev->count];
         
         prev->count += 1 + bucket->count;
         
-        XLIST_SENTINEL_SET_PTR(&bucket->elms[bucket->count], prev);
+        // prev->elms = bucket->elms;
+        XLIST_SENTINEL_SET_PTR(&prev->elms[prev->count], prev);
         
         prev->bridge_next = bucket->bridge_next;
         if(prev->bridge_next != NULL)
@@ -253,23 +260,40 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
             prev->bridge_next->bridge_prev = prev;
         }
         
-        if(bucket->next != NULL) // reuse bucket's links
+        if(prev->next == NULL)
         {
-            prev->next = bucket->next;
-            prev->prev = bucket->prev;
+            if(bucket->next != NULL) // reuse bucket's links
+            {
+                prev->next = bucket->next;
+                prev->prev = bucket->prev;
+            }
+            else
+            {
+                if(ls->tail == ls->end_sentinel)
+                {
+                    ls->head = ls->tail = prev;
+                    ls->tail->next = ls->end_sentinel;
+                    ls->end_sentinel->prev = ls->tail;
+                }
+                else
+                {
+                    ls->tail->next = prev;
+                    prev->prev = ls->tail;
+                    ls->tail = prev;
+                    ls->tail->next = ls->end_sentinel;
+                    ls->end_sentinel->prev = ls->tail;
+                }
+            }
         }
-        else
+        
+        if(prev->count < prev->cap)
         {
-            // TODO tail may be end_sentinel
-            ls->tail->next = prev;
-            prev->prev = ls->tail;
-            ls->tail = prev;
-            ls->tail->next = ls->end_sentinel;
-            ls->end_sentinel->prev = ls->tail;
+            xlist_push_not_full_bucket(ls, prev);
         }
         
         xlist_unlink_bucket(ls, bucket);
         
+        memcpy(ret, new_elm, sizeof(XLIST_T));
         return ret;
     }
     
@@ -286,7 +310,7 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     new_bucket->elms = malloc(sizeof(XLIST_T) * (new_bucket->cap + 1));
     XLIST_PUSH(ls->allocations, new_bucket->elms);
     
-    XLIST_T *elm = &new_bucket->elms[0];
+    XLIST_T *ret = &new_bucket->elms[0];
     
     xlist_assign_sentinel(&new_bucket->elms[1], new_bucket);
     
@@ -307,13 +331,14 @@ XLIST_T *xlist_put_uninit(XLIST_NAME *ls)
     
     xlist_push_not_full_bucket(ls, new_bucket);
     ls->count += 1;
-    return elm;
-    // TODO close bridges
+    
+    memcpy(ret, new_elm, sizeof(XLIST_T));
+    return ret;
 }
 
 XLIST_T *xlist_put(XLIST_NAME *ls, XLIST_T elm)
 {
-    XLIST_T *ptr = xlist_put_uninit(ls);
+    XLIST_T *ptr = xlist_put_ptr(ls, &elm);
     *ptr = elm;
     return ptr;
 }
@@ -331,13 +356,14 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
     
     xlist_bucket_t *new_bucket = malloc(sizeof(xlist_bucket_t));
     memset(new_bucket, 0, sizeof(xlist_bucket_t));
+    new_bucket->not_full_index = (size_t)-1;
+    
+    XLIST_MAYBE_GROW(ls->allocations);
+    XLIST_PUSH(ls->allocations, new_bucket);
     
     if(deleted_index == 0)
     {
         // current bucket has 0 elms, unlink it from the chain, but keep its as a bridge_prev for the new node
-        
-        XLIST_MAYBE_GROW(ls->allocations);
-        XLIST_PUSH(ls->allocations, new_bucket);
         
         new_bucket->elms = bp->elms + 1;
         new_bucket->count = bp->count - 1;
@@ -388,7 +414,7 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
         XLIST_PUSH(ls->buckets_with_prev_bridges, new_bucket);
         
         assert(
-            XLIST_SENTINEL_GET_PTR(&new_bucket->elms[new_bucket->count]) == bp
+            XLIST_SENTINEL_GET_PTR((&new_bucket->elms[new_bucket->count])) == bp
         );
         
         xlist_assign_sentinel(elm, bp);
@@ -398,7 +424,7 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
     }
     else if(deleted_index == bp->count - 1)
     {
-        new_bucket->elms = bp->elms + 1;
+        new_bucket->elms = bp->elms + bp->count;
         
         new_bucket->count = 0;
         new_bucket->cap = bp->cap - deleted_index - 1;
@@ -414,12 +440,22 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
             new_bucket->bridge_next->bridge_prev = new_bucket;
         }
         
+        // if(new_bucket->cap > 0)
+        // {
+        //     if(bp->not_full_index != (size_t)-1)
+        //     {
+        //         new_bucket->not_full_index = bp->not_full_index;
+        //         ls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
+        //     }
+        //     else
+        //     {
+        //         XLIST_MAYBE_GROW(ls->not_full_buckets);
+        //         xlist_push_not_full_bucket(ls, new_bucket);
+        //     }
+        // }
+        
         if(bp->not_full_index != (size_t)-1)
-        {
-            new_bucket->not_full_index = bp->not_full_index;
-            ls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
-            bp->not_full_index = (size_t)-1;
-        }
+            xlist_erase_not_full_bucket(ls, bp);
         
         bp->bridge_next = new_bucket;
         
@@ -459,7 +495,7 @@ XLIST_T *xlist_del(XLIST_NAME *ls, XLIST_T *elm)
             new_bucket->bridge_next->bridge_prev = new_bucket;
         }
         
-        new_bucket->elms = bp->elms + 1;
+        new_bucket->elms = bp->elms + bp->count + 1;
         
         // TODO this piece of code is repeated 2 times so far, refactor
         // lots of common code between these 3 branches
@@ -522,7 +558,7 @@ xlist_iter_t xlist_iter_next(xlist_iter_t it)
 #undef xlist_iter_t
 
 #undef xlist_init
-#undef xlist_put_uninit
+#undef xlist_put_ptr
 #undef xlist_put
 #undef xlist_del
 #undef xlist_deinit
