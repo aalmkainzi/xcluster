@@ -325,6 +325,9 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
             xcluster_push_not_full_bucket(cls, prev);
         }
         
+        // I understand the issue.
+        // the prev can be a node that's not full
+        // the solution is, put it as a not_full_bucket, even if unlinked
         memcpy(ret, new_elm, sizeof(XCLUSTER_T));
 #ifdef XCLUSTER_DEBUG
         xcluster_validate(cls);
@@ -420,7 +423,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
     size_t deleted_index = elm - bp->elms;
     
     // TODO handle cases of not_full_buckets
-    // if a node is no longer linked, it should be (size_t)-1
+    // if a node is no longer linked, it should be (size_t)-1 (NO)
     
     if(deleted_index == 0)
     {
