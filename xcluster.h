@@ -439,6 +439,11 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         bp->count = 0;
         bp->cap = 0;
         
+        // OK so here's actually what should happen:
+        // if bp has a bridge_prev, merge with it: if bp->not_full_index!=-1 then reuse its slot, if it is -1 then push the bridge_prev
+        // when should new_bucket steal bp's not_full_index? when it merges with bucket_prev and bucket_prev has a not_full_index
+        // otherwise new_bucket should be pushed and get its own index
+        
         if(bp->not_full_index != (size_t)-1)
         {
             if(new_bucket->count != 0)
