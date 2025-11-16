@@ -15,6 +15,7 @@ but how will iterators be stable? and what about it_next()?
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #if !defined(XCLUSTER_T) || !defined(XCLUSTER_NAME) || !defined(XCLUSTER_MAKE_SENTINEL) || !defined(XCLUSTER_IS_SENTINEL) || !defined(XCLUSTER_SENTINEL_GET_PTR) || !defined(XCLUSTER_SENTINEL_SET_PTR)
     #error "Must define XCLUSTER_T, XCLUSTER_NAME, XCLUSTER_MAKE_SENTINEL, XCLUSTER_IS_SENTINEL, XCLUSTER_SENTINEL_GET_PTR, and XCLUSTER_SENTINEL_SET_PTR"
@@ -91,6 +92,18 @@ typedef struct xcluster_bucket_t
     size_t count;
     size_t cap;
 } xcluster_bucket_t;
+
+// TODO const iterator. it will be invalidated by inserts/deletes
+// but is faster to iterate, since we wont check for sentinel every iteration,
+// instead we know each node's count
+
+// TODO maybe some kind of SOA thing
+// where each node stores array for EACH type
+// actually, the user type doesn't *need* a pointer field
+// if the pointer field macros are not defined,
+// we can just store a secondary buffer for pointers only
+// it wont slow down iteration speed
+// because we'll only use that buffer when we reach a node's end
 
 #ifdef XCLUSTER_DEBUG
     #define xcluster_validate XCLUSTER_CAT(XCLUSTER_NAME, _validate)
@@ -206,7 +219,7 @@ void xcluster_unlink_bucket(XCLUSTER_NAME *cls, xcluster_bucket_t *b)
     b->next = b->prev = NULL;
 }
 
-void xcluster_steal_node_links(XCLUSTER_NAME *cls, xcluster_bucket_t *old_node, xcluster_bucket_t *new_node)
+void xcluster_steal_node_links(XCLUSTER_NAME *cls, xcluster_bucket_t *new_node, xcluster_bucket_t *old_node)
 {
     new_node->next = old_node->next;
     new_node->prev = old_node->prev;
@@ -230,17 +243,41 @@ void xcluster_steal_node_links(XCLUSTER_NAME *cls, xcluster_bucket_t *old_node, 
     old_node->next = old_node->prev = NULL;
 }
 
+void xcluster_link_node(XCLUSTER_NAME *cls, xcluster_bucket_t *bucket)
+{
+    if(cls->tail == cls->end_sentinel) // empty
+    {
+        cls->head = cls->tail = bucket;
+        bucket->next = cls->end_sentinel;
+        cls->end_sentinel->prev = bucket;
+    }
+    else
+    {
+        cls->tail->next = bucket;
+        bucket->prev = cls->tail;
+        cls->tail = bucket;
+        bucket->next = cls->end_sentinel;
+        cls->end_sentinel->prev = bucket;
+    }
+}
+
 XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
 {
     if(cls->not_full_buckets.count != 0)
     {
-        
         cls->count++;
         
         xcluster_bucket_t *bucket = cls->not_full_buckets.array[cls->not_full_buckets.count - 1];
         
-        assert(bucket->next != NULL);
-        assert(bucket == cls->head || bucket->prev != NULL);
+        if(bucket->count == 0)
+        {
+            assert(bucket->next == NULL);
+            assert(bucket->prev == NULL);
+            xcluster_link_node(cls, bucket);
+        }
+        
+        // assert(bucket->next != NULL);
+        // assert(bucket == cls->head || bucket->prev != NULL);
         
         XCLUSTER_T *ret = &bucket->elms[bucket->count];
         bucket->count++;
@@ -295,24 +332,11 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *cls, const XCLUSTER_T *new_elm)
         {
             if(bucket->next != NULL) // reuse bucket's links
             {
-                xcluster_steal_node_links(cls, bucket, prev);
+                xcluster_steal_node_links(cls, prev, bucket);
             }
             else
             {
-                if(cls->tail == cls->end_sentinel)
-                {
-                    cls->head = cls->tail = prev;
-                    cls->tail->next = cls->end_sentinel;
-                    cls->end_sentinel->prev = cls->tail;
-                }
-                else
-                {
-                    cls->tail->next = prev;
-                    prev->prev = cls->tail;
-                    cls->tail = prev;
-                    cls->tail->next = cls->end_sentinel;
-                    cls->end_sentinel->prev = cls->tail;
-                }
+                xcluster_link_node(cls, prev);
             }
         }
         else if(bucket->next != NULL)
@@ -408,6 +432,14 @@ size_t xcluster_bridges_with_prev_index(XCLUSTER_NAME *cls, xcluster_bucket_t *b
     return (size_t)-1;
 }
 
+void xcluster_steal_node_not_full_index(XCLUSTER_NAME *cls, xcluster_bucket_t *new_node, xcluster_bucket_t *old_node)
+{
+    assert(old_node->not_full_index != (size_t)-1);
+    
+    new_node->not_full_index = old_node->not_full_index;
+    cls->not_full_buckets.array[new_node->not_full_index] = new_node;
+}
+
 XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
 {
     cls->count -= 1;
@@ -419,6 +451,8 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
     }
     
     xcluster_bucket_t *bp = (xcluster_bucket_t*) XCLUSTER_SENTINEL_GET_PTR(end);
+    xcluster_bucket_t *bp_next_node = bp->next;
+    xcluster_bucket_t *bp_prev_node = bp->prev;
     
     size_t deleted_index = elm - bp->elms;
     
@@ -444,43 +478,51 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         // when should new_bucket steal bp's not_full_index? when it merges with bucket_prev and bucket_prev has a not_full_index
         // otherwise new_bucket should be pushed and get its own index
         
-        if(bp->not_full_index != (size_t)-1)
-        {
-            if(new_bucket->count != 0)
-            {
-                new_bucket->not_full_index = bp->not_full_index;
-                cls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
-            }
-            else
-            {
-                xcluster_erase_not_full_bucket(cls, bp);
-            }
-        }
-        
-        bp->not_full_index = (size_t)-1;
-        
         if(bp->bridge_prev != NULL)
         {
-            xcluster_bucket_t *bp_prev = bp->bridge_prev;
-            assert((bp_prev->elms + bp_prev->cap + 1) == bp->elms);
+            xcluster_bucket_t *bp_bridge_prev = bp->bridge_prev;
+            assert((bp_bridge_prev->elms + bp_bridge_prev->cap + 1) == bp->elms);
             
-            bp_prev->cap = bp_prev->cap + 1;
+            bp_bridge_prev->cap = bp_bridge_prev->cap + 1;
             
-            if(bp_prev->count > 0 && bp_prev->not_full_index == (size_t)-1)
+            if(bp_bridge_prev->not_full_index == (size_t)-1)
             {
-                xcluster_push_not_full_bucket(cls, bp_prev);
+                if(bp->not_full_index != (size_t)-1)
+                {
+                    xcluster_steal_node_not_full_index(cls, bp_bridge_prev, bp);
+                    bp->not_full_index = (size_t)-1;
+                }
+                else
+                {
+                    xcluster_push_not_full_bucket(cls, bp_bridge_prev);
+                }
             }
-            bp_prev->bridge_next = new_bucket;
-            new_bucket->bridge_prev = bp_prev;
             
-            size_t index = xcluster_bridges_with_prev_index(cls, bp);
+            if(bp_bridge_prev->count != 0)
+            {
+                assert(bp->next != NULL);
+                xcluster_steal_node_links(cls, bp_bridge_prev, bp);
+            }
+            
+            bp_bridge_prev->bridge_next = new_bucket;
+            new_bucket->bridge_prev = bp_bridge_prev;
+            
+            size_t index = xcluster_bridges_with_prev_index(cls, bp); // TODO maybe nodes should store with_prev_index
             assert(index != (size_t)-1);
             cls->buckets_with_prev_bridges.array[index] = new_bucket;
             
-            assert(bp_prev->bridge_next == new_bucket);
-            assert(new_bucket->bridge_prev == bp_prev);
-            assert((bp_prev->elms + bp_prev->cap + 1) == new_bucket->elms);
+            assert(bp_bridge_prev->bridge_next == new_bucket);
+            assert(new_bucket->bridge_prev == bp_bridge_prev);
+            assert((bp_bridge_prev->elms + bp_bridge_prev->cap + 1) == new_bucket->elms);
             assert(new_bucket->bridge_prev != new_bucket);
+            
+            new_bucket->bridge_next = bp->bridge_next;
+            if(new_bucket->bridge_next != NULL)
+            {
+                new_bucket->bridge_next->bridge_prev = new_bucket;
+            }
+            
+            // TODO push bp to some kind of bucket_reserve here
         }
         else
         {
@@ -491,34 +533,56 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
             XCLUSTER_PUSH(cls->buckets_with_prev_bridges, new_bucket);
             
             assert((bp->elms + bp->cap + 1) == new_bucket->elms);
+            
+            new_bucket->bridge_next = bp->bridge_next;
+            if(new_bucket->bridge_next != NULL)
+            {
+                new_bucket->bridge_next->bridge_prev = new_bucket;
+            }
+            bp->bridge_next = new_bucket;
         }
         
-        new_bucket->bridge_next = bp->bridge_next;
-        if(new_bucket->bridge_next != NULL)
+        if(new_bucket->cap > new_bucket->count)
         {
-            new_bucket->bridge_next->bridge_prev = new_bucket;
+            if(bp->not_full_index == (size_t)-1)
+            {
+                new_bucket->not_full_index = bp->not_full_index;
+                cls->not_full_buckets.array[new_bucket->not_full_index] = new_bucket;
+                bp->not_full_index = (size_t)-1;
+            }
+            else
+            {
+                xcluster_push_not_full_bucket(cls, new_bucket);
+            }
+            
+            xcluster_assign_sentinel(elm, bp);
         }
-        bp->bridge_next = new_bucket; // this actually needs to be here for the else branch, but it has to be done after using bp->birdge_next
+        
+        xcluster_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
         XCLUSTER_T *ret = NULL;
         if(new_bucket->count != 0)
         {
-            xcluster_steal_node_links(cls, bp, new_bucket);
+            if(bp->next != NULL)
+            {
+                xcluster_steal_node_links(cls, new_bucket, bp);
+            }
+            else
+            {
+                xcluster_link_node(cls, new_bucket);
+            }
             
             ret = new_bucket->elms;
         }
         else
         {
-            ret = bp->next->elms;
+            ret = bp_next_node->elms;
             xcluster_unlink_bucket(cls, bp);
         }
         
         assert(
             XCLUSTER_SENTINEL_GET_PTR((&new_bucket->elms[new_bucket->count])) == bp
         );
-        
-        xcluster_assign_sentinel(elm, bp); // we probably should not do this in case bp merged with bp->bridge_prev... but it shouldnt matter
-        xcluster_assign_sentinel(&new_bucket->elms[new_bucket->count], new_bucket);
         
         assert(new_bucket->bridge_prev != new_bucket);
 #ifdef XCLUSTER_DEBUG
@@ -572,7 +636,6 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *cls, XCLUSTER_T *elm)
         {
             new_bucket->bridge_next->bridge_prev = new_bucket;
         }
-        
         
         new_bucket->elms = bp->elms + bp->count + 1;
         

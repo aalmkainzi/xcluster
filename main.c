@@ -21,7 +21,7 @@ typedef struct S
 #define XCLUSTER_MAKE_SENTINEL(a) ((a)->k = -1)
 #define XCLUSTER_IS_SENTINEL(a) ((a)->k == -1)
 #define XCLUSTER_SENTINEL_SET_PTR(a,pp) ((a)->p=(void*)pp)
-#define XCLUSTER_SENTINEL_GET_PTR(a) (a->p)
+#define XCLUSTER_SENTINEL_GET_PTR(a) ((a)->p)
 #define XCLUSTER_IMPL
 #include "xcluster.h"
 
