@@ -408,6 +408,206 @@ static void test_super_stress() {
     ss_deinit(&c);
 }
 
+static void test_clone_intensive_randomized() {
+    // Intensive randomized validation of ss_clone under many conditions.
+    // Relies on helpers: ss_init, ss_put, ss_put_ptr, ss_del, ss_clone, ss_begin/ss_end/ss_next,
+    // counts_in_xcluster, nth_element, expect, die, and ss_deinit already present in the test file.
+    ss orig; ss_init(&orig);
+
+    // deterministic for reproducibility
+    std::mt19937_64 rng(4242424242ULL);
+    constexpr int KEY_SPACE = 20000;                // moderate key space to force duplicates
+    std::uniform_int_distribution<int> keyDist(1, KEY_SPACE);
+    // ops: insert 55%, delete 35%, put_ptr 10%
+    std::discrete_distribution<int> opDist({55,35,10});
+
+    // Model for original container: O(1) updates via vector
+    std::vector<int> modelCounts(KEY_SPACE + 1, 0);
+    size_t model_total = 0;
+
+    // Live pointer vector for orig so deletes are O(1)
+    std::vector<S*> live_orig;
+    live_orig.reserve(100000);
+
+    const size_t OPS = 200000;          // number of operations on original (intensive)
+    const size_t CLONE_EVERY = 5000;    // create a clone every CLONE_EVERY ops
+    const size_t CLONE_MUTATIONS = 400; // number of random operations to perform on each clone
+    const size_t CLONE_VALIDATES = 2;   // how many intermediate validations for clone (cheap)
+
+    for (size_t op = 0; op < OPS; ++op) {
+        int kind = opDist(rng);
+        if (kind == 0) { // insert by value
+            int k = keyDist(rng);
+            S *ret = ss_put(&orig, S{ .k = k, .p = nullptr });
+            if (!ret) die("ss_put returned null in clone-intensive original insert");
+            live_orig.push_back(ret);
+            if (modelCounts[k] == 0) { /* distinct count change not tracked separately here */ }
+            ++modelCounts[k];
+            ++model_total;
+        } else if (kind == 1) { // delete random instance if any
+            if (model_total > 0 && !live_orig.empty()) {
+                size_t idx = (size_t)(rng() % live_orig.size());
+                S *elem = live_orig[idx];
+                int k = elem->k;                 // capture key BEFORE deletion (important)
+                ss_del(&orig, elem);             // may invalidate elem pointer
+                // remove from live_orig by swap-pop
+                live_orig[idx] = live_orig.back();
+                live_orig.pop_back();
+
+                --modelCounts[k];
+                --model_total;
+            }
+        } else { // put_ptr
+            int k = keyDist(rng);
+            S tmp; tmp.k = k; tmp.p = nullptr;
+            S *ret = ss_put_ptr(&orig, &tmp);
+            if (!ret) die("ss_put_ptr returned null in clone-intensive original put_ptr");
+            live_orig.push_back(ret);
+            ++modelCounts[k];
+            ++model_total;
+        }
+
+        // periodically create a clone and stress-test it independently
+        if ((op + 1) % CLONE_EVERY == 0) {
+            // create clone
+            ss cloned = ss_clone(&orig);
+
+            // quick sanity: counts match
+            expect((size_t)cloned.count == model_total, "clone.count != original model_total immediately after clone");
+            // detailed per-key check once (iterate clone)
+            auto clone_counts_initial = counts_in_xcluster(&cloned);
+            for (int k = 1; k <= KEY_SPACE; ++k) {
+                if (modelCounts[k] != clone_counts_initial[k]) {
+                    std::cerr << "CLONE-MISMATCH: key=" << k
+                              << " orig_count=" << modelCounts[k]
+                              << " clone_count=" << clone_counts_initial[k]
+                              << " at original op " << (op + 1) << "\n";
+                    die("clone initial per-key mismatch");
+                }
+            }
+
+            // Build a quick live pointer list for clone to enable fast deletes on the clone
+            std::vector<S*> live_clone;
+            live_clone.reserve(clone_counts_initial.size() ? std::min<size_t>(clone_counts_initial.size()*2, 65536) : 1024);
+            for (S *it = ss_begin(&cloned); it != ss_end(&cloned); it = ss_next(it)) live_clone.push_back(it);
+
+            // clone_model copies original modelCounts so we can mutate and validate the clone independently
+            std::vector<int> clone_model = modelCounts;
+            size_t clone_total = model_total;
+
+            // perform randomized mutations on the clone (these must NOT affect the original)
+            std::uniform_int_distribution<int> localKeyDist(1, KEY_SPACE);
+            std::discrete_distribution<int> localOpDist({55,35,10}); // same op distribution
+            for (size_t m = 0; m < CLONE_MUTATIONS; ++m) {
+                int localKind = localOpDist(rng);
+                if (localKind == 0) { // insert on clone
+                    int k = localKeyDist(rng);
+                    S *r = ss_put(&cloned, S{ .k = k, .p = nullptr });
+                    if (!r) die("ss_put returned null while mutating clone");
+                    live_clone.push_back(r);
+                    ++clone_model[k];
+                    ++clone_total;
+                } else if (localKind == 1) { // delete on clone
+                    if (clone_total > 0 && !live_clone.empty()) {
+                        size_t idx = (size_t)(rng() % live_clone.size());
+                        S *elem = live_clone[idx];
+                        int k = elem->k;                   // capture BEFORE deletion
+                        ss_del(&cloned, elem);
+                        live_clone[idx] = live_clone.back();
+                        live_clone.pop_back();
+                        --clone_model[k];
+                        --clone_total;
+                    }
+                } else { // put_ptr on clone
+                    int k = localKeyDist(rng);
+                    S tmp; tmp.k = k; tmp.p = nullptr;
+                    S *r = ss_put_ptr(&cloned, &tmp);
+                    if (!r) die("ss_put_ptr returned null while mutating clone");
+                    live_clone.push_back(r);
+                    ++clone_model[k];
+                    ++clone_total;
+                }
+
+                // occasional light validation to keep test honest without being too slow
+                if ((m + 1) % (CLONE_MUTATIONS / (CLONE_VALIDATES + 1) + 1) == 0) {
+                    // check clone.count fast
+                    expect((size_t)cloned.count == clone_total, "clone.count mismatch during clone mutations");
+
+                    // sample a few live_clone pointers and assert their keys match clone_model positive counts
+                    if (!live_clone.empty()) {
+                        const size_t SAMP = 32;
+                        for (size_t s = 0; s < SAMP; ++s) {
+                            size_t idx = (size_t)(rng() % live_clone.size());
+                            int kk = live_clone[idx]->k; // pointer from live_clone remains valid until we ss_del on clone
+                            if (kk < 1 || kk > KEY_SPACE) {
+                                std::cerr << "clone sampled key out-of-range: " << kk << "\n";
+                                die("clone sampled key out-of-range");
+                            }
+                            if (clone_model[kk] <= 0) {
+                                std::cerr << "clone sampled key with non-positive model count: key=" << kk << "\n";
+                                die("clone sampled key missing in clone_model");
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Final full validation for clone (one full iteration)
+            auto clone_final_counts = counts_in_xcluster(&cloned);
+            if (clone_final_counts.size() != 0) {
+                for (int k = 1; k <= KEY_SPACE; ++k) {
+                    if (clone_final_counts[k] != clone_model[k]) {
+                        std::cerr << "CLONE-FINAL-MISMATCH key=" << k
+                                  << " expected=" << clone_model[k]
+                                  << " got=" << clone_final_counts[k] << "\n";
+                        die("clone final per-key mismatch");
+                    }
+                }
+            } else {
+                // If clone_final_counts is empty, ensure clone_model total is zero
+                size_t sum = 0;
+                for (int k = 1; k <= KEY_SPACE; ++k) sum += (size_t)clone_model[k];
+                if (sum != 0) {
+                    std::cerr << "CLONE-FINAL-MISMATCH: clone appears empty but clone_model total=" << sum << "\n";
+                    die("clone final unexpectedly empty");
+                }
+            }
+
+            // IMPORTANT: verify original container remains unchanged after clone mutations
+            expect((size_t)orig.count == model_total, "original.count changed after mutating clone");
+            auto orig_counts_after = counts_in_xcluster(&orig);
+            for (int k = 1; k <= KEY_SPACE; ++k) {
+                if (orig_counts_after[k] != modelCounts[k]) {
+                    std::cerr << "ORIG-AFTER-CLONE-MUTATION: key=" << k
+                              << " orig_after=" << orig_counts_after[k]
+                              << " expected=" << modelCounts[k] << "\n";
+                    die("original mutated after clone operations");
+                }
+            }
+
+            // Clean up cloned container
+            ss_deinit(&cloned);
+
+            // continue mutating original...
+        }
+    }
+
+    // final full validation of original container
+    expect((size_t)orig.count == model_total, "original final count mismatch after all ops");
+
+    auto final_orig_counts = counts_in_xcluster(&orig);
+    for (int k = 1; k <= KEY_SPACE; ++k) {
+        if (final_orig_counts[k] != modelCounts[k]) {
+            std::cerr << "ORIG-FINAL-MISMATCH key=" << k
+                      << " expected=" << modelCounts[k]
+                      << " got=" << final_orig_counts[k] << "\n";
+            die("original final per-key mismatch");
+        }
+    }
+
+    ss_deinit(&orig);
+}
+
 
 int main() {
     std::cout << "xcluster.h tests (duplicates-enabled) starting...\n";
@@ -435,6 +635,9 @@ int main() {
     
     test_super_stress();
     std::cout << " - super stress OK\n";
+    
+    test_clone_intensive_randomized();
+    std::cout << " - clone test OK\n";
     
     std::cout << "ALL TESTS PASSED\n";
     return 0;
