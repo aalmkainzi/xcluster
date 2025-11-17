@@ -94,6 +94,10 @@ typedef struct xcluster_node_t
 // it wont slow down iteration speed
 // because we'll only use that buffer when we reach a node's end
 
+// TODO An approach to avoid needing pointer from sentinel, and to avoid xcluster_del being slow:
+// store a second array of pointers to the owning bucket, kinda crazy, will use lots of memory
+// but iteration speed shouldn't be affected I think.
+
 #ifdef XCLUSTER_DEBUG
     #define xcluster_validate XCLUSTER_CAT(XCLUSTER_NAME, _validate)
     bool xcluster_validate(XCLUSTER_NAME *_xc);
