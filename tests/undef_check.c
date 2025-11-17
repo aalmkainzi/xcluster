@@ -37,10 +37,15 @@ int main(int argc, char **argv)
             {
                 // an undef
                 
-                char *undef = line + i + strlen("#undef ");
+                char *undef = line + i + strlen("#undef "); // `undef` contains newline
                 char *undef_dup = malloc(strlen(undef));
                 memcpy(undef_dup, undef, strlen(undef) - 1);
                 undef_dup[strlen(undef) - 1] = 0;
+                
+                size_t trailing = strlen(undef_dup) - 1;
+                while( isspace(undef_dup[trailing]) )
+                    undef_dup[trailing--] = '\0';
+                
                 size_t i;
                 for(i = 0 ; i < arrlen(macros) ; i++)
                 {
@@ -61,7 +66,7 @@ int main(int argc, char **argv)
         {
             char *macro_name = line + i + strlen("#define ");
             int j = 0;
-            for( ; isalpha(macro_name[j]) || macro_name[j] == '_' ; j++);
+            for( ; isalpha(macro_name[j]) || macro_name[j] == '_' ; j++); // TODO numbers are also allowed
             char *macro_dup = malloc(j + 1);
             memcpy(macro_dup, macro_name, j);
             macro_dup[j] = 0;
@@ -75,7 +80,7 @@ int main(int argc, char **argv)
         printf("Found macros that were never undefined:\n");
         for(size_t i = 0 ; i < arrlen(macros) ; i++)
         {
-            printf("%s\n", macros[i]);
+            printf("\"%s\"\n", macros[i]);
         }
     }
     
