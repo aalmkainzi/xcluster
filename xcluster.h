@@ -8,6 +8,10 @@
     #error "Must define XCLUSTER_T, XCLUSTER_NAME, XCLUSTER_MAKE_SENTINEL, XCLUSTER_IS_SENTINEL, XCLUSTER_SENTINEL_GET_PTR, and XCLUSTER_SENTINEL_SET_PTR"
 #endif
 
+#if defined(XCLUSTER_DEBUG)
+    #define xcluster_assert assert
+#endif
+
 #define XCLUSTER_CAT_(a, _node) a##_node
 #define XCLUSTER_CAT(a, _node)  XCLUSTER_CAT_(a,_node)
 
@@ -49,7 +53,8 @@ typedef struct XCLUSTER_NAME
     struct xcluster_node_t *tail;
     struct xcluster_node_t *head;
     struct xcluster_node_t *end_sentinel;
-    size_t node_count;
+    
+    struct xcluster_node_t *node_reserve;
     
     size_t prev_cap;
     size_t count;
@@ -201,7 +206,7 @@ XCLUSTER_NAME xcluster_clone(XCLUSTER_NAME *_xc)
 
 void xcluster_erase_not_full_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
 {
-    assert(_node->not_full_index != (size_t)-1);
+    xcluster_assert(_node->not_full_index != (size_t)-1);
     
     size_t index = _node->not_full_index;
     size_t last = _xc->not_full_nodes.count - 1;
@@ -214,7 +219,7 @@ void xcluster_erase_not_full_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
 
 void xcluster_push_not_full_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
 {
-    assert(_node->not_full_index == (size_t)-1);
+    xcluster_assert(_node->not_full_index == (size_t)-1);
     
     XCLUSTER_MAYBE_GROW(_xc->not_full_nodes);
     XCLUSTER_PUSH(_xc->not_full_nodes, _node);
@@ -300,13 +305,10 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         
         if(node->count == 0)
         {
-            assert(node->next == NULL);
-            assert(node->prev == NULL);
+            xcluster_assert(node->next == NULL);
+            xcluster_assert(node->prev == NULL);
             xcluster_link_node(_xc, node);
         }
-        
-        // assert(node->next != NULL);
-        // assert(node == _xc->head || node->prev != NULL);
         
         XCLUSTER_T *ret = &node->elms[node->count];
         node->count++;
@@ -317,8 +319,6 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         {
             node->not_full_index = (size_t)-1;
             _xc->not_full_nodes.count -= 1;
-            // TODO what we can do here is check if node has bridge_next,
-            // and merge with it if so
         }
         
         memcpy(ret, _new_elm, sizeof(XCLUSTER_T));
@@ -336,10 +336,10 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         xcluster_node_t *prev = node->bridge_prev;
         
         // they may be empty and unlinked, or full
-        assert(prev != NULL);
-        assert(prev->count == prev->cap || prev->count == 0);
-        assert(node->count == node->cap || node->count == 0);
-        assert((prev->elms + prev->cap + 1) == node->elms);
+        xcluster_assert(prev != NULL);
+        xcluster_assert(prev->count == prev->cap || prev->count == 0);
+        xcluster_assert(node->count == node->cap || node->count == 0);
+        xcluster_assert((prev->elms + prev->cap + 1) == node->elms);
         
         size_t prevoldcap = prev->cap;
         size_t prevoldcount = prev->count;
@@ -378,9 +378,6 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
             xcluster_push_not_full_node(_xc, prev);
         }
         
-        // I understand the issue.
-        // the prev can be a node that's not full
-        // the solution is, put it as a not_full_node, even if unlinked
         memcpy(ret, _new_elm, sizeof(XCLUSTER_T));
 #ifdef XCLUSTER_DEBUG
         xcluster_validate(_xc);
@@ -388,10 +385,8 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         return ret;
     }
     
-    XCLUSTER_MAYBE_GROW(_xc->allocations, 2);
-    
-    xcluster_node_t *new_node = (xcluster_node_t*) malloc(sizeof(xcluster_node_t));
-    XCLUSTER_PUSH(_xc->allocations, new_node);
+    xcluster_node_t *new_node = xcluster_alloc_node(_xc);
+    // XCLUSTER_PUSH(_xc->allocations, new_node);
     
     memset(new_node, 0, sizeof(xcluster_node_t));
     new_node->not_full_index = (size_t)-1;
@@ -399,6 +394,8 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
     _xc->prev_cap *= 2;
     
     new_node->elms = (XCLUSTER_T*) malloc(sizeof(XCLUSTER_T) * (new_node->cap + 1));
+    
+    XCLUSTER_MAYBE_GROW(_xc->allocations);
     XCLUSTER_PUSH(_xc->allocations, new_node->elms);
     
     XCLUSTER_T *ret = &new_node->elms[0];
@@ -439,14 +436,23 @@ XCLUSTER_T *xcluster_put(XCLUSTER_NAME *_xc, XCLUSTER_T _elm)
 
 xcluster_node_t *xcluster_alloc_node(XCLUSTER_NAME *_xc)
 {
-    xcluster_node_t *new_node = (xcluster_node_t*) malloc(sizeof(xcluster_node_t));
-    memset(new_node, 0, sizeof(xcluster_node_t));
-    new_node->not_full_index = (size_t)-1;
-    
-    XCLUSTER_MAYBE_GROW(_xc->allocations);
-    XCLUSTER_PUSH(_xc->allocations, new_node);
-    
-    return new_node;
+    if(_xc->node_reserve != NULL)
+    {
+        xcluster_node_t *ret = _xc->node_reserve;
+        _xc->node_reserve = _xc->node_reserve->next;
+        return ret;
+    }
+    else
+    {
+        xcluster_node_t *new_node = (xcluster_node_t*) malloc(sizeof(xcluster_node_t));
+        memset(new_node, 0, sizeof(xcluster_node_t));
+        new_node->not_full_index = (size_t)-1;
+        
+        XCLUSTER_MAYBE_GROW(_xc->allocations);
+        XCLUSTER_PUSH(_xc->allocations, new_node);
+        
+        return new_node;
+    }
 }
 
 size_t xcluster_bridges_with_prev_index(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
@@ -463,12 +469,25 @@ size_t xcluster_bridges_with_prev_index(XCLUSTER_NAME *_xc, xcluster_node_t *_no
 
 void xcluster_steal_node_not_full_index(XCLUSTER_NAME *_xc, xcluster_node_t *_new_node, xcluster_node_t *_old_node)
 {
-    assert(_old_node->not_full_index != (size_t)-1);
+    xcluster_assert(_old_node->not_full_index != (size_t)-1);
     
     _new_node->not_full_index = _old_node->not_full_index;
     _xc->not_full_nodes.array[_new_node->not_full_index] = _new_node;
     
     _old_node->not_full_index = (size_t)-1;
+}
+
+void xcluster_push_to_node_reserve(XCLUSTER_NAME *_xc, xcluster_node_t *_unused)
+{
+    // xcluster_assert(_unused->next == NULL);
+    // xcluster_assert(_unused->prev == NULL);
+    // xcluster_assert(_unused->count == 0);
+    // xcluster_assert(_unused->cap == 0);
+    
+    xcluster_node_t *old_head;
+    _xc->node_reserve = _unused;
+    _unused->next = old_head;
+    // no need to set prev, _unused->next might even be NULL, so we'd need a branch
 }
 
 XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
@@ -511,7 +530,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
         if(bp->bridge_prev != NULL)
         {
             xcluster_node_t *bp_bridge_prev = bp->bridge_prev;
-            assert((bp_bridge_prev->elms + bp_bridge_prev->cap + 1) == bp->elms);
+            xcluster_assert((bp_bridge_prev->elms + bp_bridge_prev->cap + 1) == bp->elms);
             
             bp_bridge_prev->cap = bp_bridge_prev->cap + 1;
             
@@ -531,13 +550,13 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
             new_node->bridge_prev = bp_bridge_prev;
             
             size_t index = xcluster_bridges_with_prev_index(_xc, bp); // TODO maybe nodes should store with_prev_index
-            assert(index != (size_t)-1);
+            xcluster_assert(index != (size_t)-1);
             _xc->nodes_with_prev_bridges.array[index] = new_node;
             
-            assert(bp_bridge_prev->bridge_next == new_node);
-            assert(new_node->bridge_prev == bp_bridge_prev);
-            assert((bp_bridge_prev->elms + bp_bridge_prev->cap + 1) == new_node->elms);
-            assert(new_node->bridge_prev != new_node);
+            xcluster_assert(bp_bridge_prev->bridge_next == new_node);
+            xcluster_assert(new_node->bridge_prev == bp_bridge_prev);
+            xcluster_assert((bp_bridge_prev->elms + bp_bridge_prev->cap + 1) == new_node->elms);
+            xcluster_assert(new_node->bridge_prev != new_node);
             
             new_node->bridge_next = bp->bridge_next;
             if(new_node->bridge_next != NULL)
@@ -545,17 +564,17 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                 new_node->bridge_next->bridge_prev = new_node;
             }
             
-            // TODO push bp to some kind of node_reserve here
+            xcluster_push_to_node_reserve(_xc, bp);
         }
         else
         {
             new_node->bridge_prev = bp;
-            assert(new_node->bridge_prev != new_node);
+            xcluster_assert(new_node->bridge_prev != new_node);
             
             XCLUSTER_MAYBE_GROW(_xc->nodes_with_prev_bridges);
             XCLUSTER_PUSH(_xc->nodes_with_prev_bridges, new_node);
             
-            assert((bp->elms + bp->cap + 1) == new_node->elms);
+            xcluster_assert((bp->elms + bp->cap + 1) == new_node->elms);
             
             new_node->bridge_next = bp->bridge_next;
             if(new_node->bridge_next != NULL)
@@ -577,7 +596,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
             }
         }
         
-        assert(
+        xcluster_assert(
             XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp
         );
         
@@ -596,7 +615,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
             xcluster_unlink_node(_xc, bp);
         }
         
-        assert(new_node->bridge_prev != new_node);
+        xcluster_assert(new_node->bridge_prev != new_node);
 #ifdef XCLUSTER_DEBUG
         xcluster_validate(_xc); // error found in this branch
 #endif
@@ -654,7 +673,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
         
         new_node->elms = bp->elms + bp->count + 1;
         
-        assert((bp->elms + bp->cap + 1) == new_node->elms);
+        xcluster_assert((bp->elms + bp->cap + 1) == new_node->elms);
         
         if(bp->not_full_index != (size_t)-1)
         {
@@ -720,41 +739,41 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
         
         for(size_t i = 0 ; i < _node->count ; i++)
         {
-            assert(!XCLUSTER_IS_SENTINEL((&_node->elms[i])));
+            xcluster_assert(!XCLUSTER_IS_SENTINEL((&_node->elms[i])));
         }
-        assert(XCLUSTER_IS_SENTINEL((&_node->elms[_node->count])));
+        xcluster_assert(XCLUSTER_IS_SENTINEL((&_node->elms[_node->count])));
         xcluster_node_t *bb = (xcluster_node_t*) XCLUSTER_SENTINEL_GET_PTR((&_node->elms[_node->count]));
-        assert(bb == _node);
+        xcluster_assert(bb == _node);
         
-        assert(_node->prev == prev);
+        xcluster_assert(_node->prev == prev);
         
         prev = _node;
         _node = _node->next;
         
-        assert(_node != NULL);
+        xcluster_assert(_node != NULL);
     }
     
     for(size_t i = 0 ; i < _xc->not_full_nodes.count ; i++)
     {
         xcluster_node_t *_node = _xc->not_full_nodes.array[i];
-        assert(_node->cap > _node->count);
-        assert(_node->not_full_index == i);
-        assert((_node->count == 0 && _node->next == NULL) || (_node->count != 0 && _node->next != NULL));
+        xcluster_assert(_node->cap > _node->count);
+        xcluster_assert(_node->not_full_index == i);
+        xcluster_assert((_node->count == 0 && _node->next == NULL) || (_node->count != 0 && _node->next != NULL));
         if(_node->count != 0)
-            assert(_node == _xc->head || _node->prev != NULL);
+            xcluster_assert(_node == _xc->head || _node->prev != NULL);
     }
     
     for(size_t i = 0 ; i < _xc->nodes_with_prev_bridges.count ; i++)
     {
         xcluster_node_t *node = _xc->nodes_with_prev_bridges.array[i];
         xcluster_node_t *prev = node->bridge_prev;
-        assert(prev != NULL);
-        assert((prev->elms + prev->cap + 1) == node->elms);
-        assert(prev->bridge_next == node);
-        assert(XCLUSTER_SENTINEL_GET_PTR(&prev->elms[prev->count]) == prev);
+        xcluster_assert(prev != NULL);
+        xcluster_assert((prev->elms + prev->cap + 1) == node->elms);
+        xcluster_assert(prev->bridge_next == node);
+        xcluster_assert(XCLUSTER_SENTINEL_GET_PTR(&prev->elms[prev->count]) == prev);
     }
     
-    assert(accum == _xc->count);
+    xcluster_assert(accum == _xc->count);
     return true;
 }
 
