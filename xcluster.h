@@ -4,6 +4,24 @@
 #include <assert.h>
 #include <stdbool.h>
 
+/*
+new idea:
+optimization to make the next ptr stored in elms[count] actually just point to the next node's elms directly
+but then we can't erase because we need to access the actual node.
+maybe just iterate through the container comparing the elm ptr with `>= begin` and `< end` of each node to find its owning node
+
+OR. create secondary array for nodes, in which they store pointers:
+ptrs[count] == node->next->elms
+ptrs[count-1] == node
+
+i kind of prefer approach 1, it's simpler and doesnt require secondary array.
+but then again, if secondary array is gonna be used anyway (user didnt provide XCLUSTER_SENTINEL_GET_PTR and XCLUSTER_SENTINEL_SET_PTR),
+then might as well do approach 2
+
+ALSO. think of an unstable_handle/iterator type that can enable fast erasure
+
+*/
+
 #if !defined(XCLUSTER_T) || !defined(XCLUSTER_NAME) || !defined(XCLUSTER_MAKE_SENTINEL) || !defined(XCLUSTER_IS_SENTINEL) || !defined(XCLUSTER_SENTINEL_GET_PTR) || !defined(XCLUSTER_SENTINEL_SET_PTR)
     #error "Must define XCLUSTER_T, XCLUSTER_NAME, XCLUSTER_MAKE_SENTINEL, XCLUSTER_IS_SENTINEL, XCLUSTER_SENTINEL_GET_PTR, and XCLUSTER_SENTINEL_SET_PTR"
 #endif
@@ -15,7 +33,7 @@
 #define XCLUSTER_CAT_(a, _node) a##_node
 #define XCLUSTER_CAT(a, _node)  XCLUSTER_CAT_(a,_node)
 
-#define xcluster_node_t   XCLUSTER_CAT(XCLUSTER_NAME, _node_t)
+#define xcluster_node_t     XCLUSTER_CAT(XCLUSTER_NAME, _node_t)
 
 #define xcluster_init       XCLUSTER_CAT(XCLUSTER_NAME, _init)
 #define xcluster_put_ptr    XCLUSTER_CAT(XCLUSTER_NAME, _put_ptr)
