@@ -458,6 +458,8 @@ xcluster_node_t *xcluster_alloc_node(XCLUSTER_NAME *_xc)
     {
         xcluster_node_t *ret = _xc->node_reserve;
         _xc->node_reserve = _xc->node_reserve->next;
+        memset(ret, 0, sizeof(xcluster_node_t));
+        ret->not_full_index = (size_t)-1;
         return ret;
     }
     else
@@ -502,7 +504,7 @@ void xcluster_push_to_node_reserve(XCLUSTER_NAME *_xc, xcluster_node_t *_unused)
     // xcluster_assert(_unused->count == 0);
     // xcluster_assert(_unused->cap == 0);
     
-    xcluster_node_t *old_head;
+    xcluster_node_t *old_head = _xc->node_reserve;
     _xc->node_reserve = _unused;
     _unused->next = old_head;
     // no need to set prev, _unused->next might even be NULL, so we'd need a branch
@@ -582,7 +584,38 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                 new_node->bridge_next->bridge_prev = new_node;
             }
             
-            xcluster_push_to_node_reserve(_xc, bp);
+            { // begin
+                if(new_node->cap > new_node->count)
+                {
+                    xcluster_push_not_full_node(_xc, new_node);
+                }
+                
+                xcluster_assert(
+                    XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp
+                );
+                
+                xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
+                
+                XCLUSTER_T *ret = NULL;
+                
+                if(new_node->count != 0)
+                {
+                    xcluster_steal_node_links(_xc, new_node, bp);
+                    ret = new_node->elms;
+                }
+                else
+                {
+                    ret = bp_next_node->elms;
+                }
+                
+                xcluster_push_to_node_reserve(_xc, bp);
+                
+                xcluster_assert(new_node->bridge_prev != new_node);
+#ifdef XCLUSTER_DEBUG
+                xcluster_validate(_xc); // error found in this branch. bp is still linked
+#endif
+                return ret;
+            } // end
         }
         else
         {
@@ -600,44 +633,46 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                 new_node->bridge_next->bridge_prev = new_node;
             }
             bp->bridge_next = new_node;
-        }
-        
-        if(new_node->cap > new_node->count)
-        {
-            if(bp->not_full_index != (size_t)-1)
-            {
-                xcluster_steal_node_not_full_index(_xc, new_node, bp);
-            }
-            else
-            {
-                xcluster_push_not_full_node(_xc, new_node);
-            }
-        }
-        
-        xcluster_assert(
-            XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp
-        );
-        
-        xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
-        
-        XCLUSTER_T *ret = NULL;
-        
-        if(new_node->count != 0)
-        {
-            xcluster_steal_node_links(_xc, new_node, bp);
-            ret = new_node->elms;
-        }
-        else
-        {
-            ret = bp_next_node->elms;
-            xcluster_unlink_node(_xc, bp);
-        }
-        
-        xcluster_assert(new_node->bridge_prev != new_node);
+            
+            { // begin
+                if(new_node->cap > new_node->count)
+                {
+                    if(bp->not_full_index != (size_t)-1)
+                    {
+                        xcluster_steal_node_not_full_index(_xc, new_node, bp);
+                    }
+                    else
+                    {
+                        xcluster_push_not_full_node(_xc, new_node);
+                    }
+                }
+                
+                xcluster_assert(
+                    XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp
+                );
+                
+                xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
+                
+                XCLUSTER_T *ret = NULL;
+                
+                if(new_node->count != 0)
+                {
+                    xcluster_steal_node_links(_xc, new_node, bp);
+                    ret = new_node->elms;
+                }
+                else
+                {
+                    ret = bp_next_node->elms;
+                    xcluster_unlink_node(_xc, bp); // TODO the error is on this line. because bp was pushed to node reserve in one of the branches above
+                }
+                
+                xcluster_assert(new_node->bridge_prev != new_node);
 #ifdef XCLUSTER_DEBUG
-        xcluster_validate(_xc); // error found in this branch
+                xcluster_validate(_xc); // error found in this branch
 #endif
-        return ret;
+                return ret;
+            } // end
+        }
     }
     else if(deleted_index == bp->count - 1)
     {
@@ -759,6 +794,7 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
         {
             xcluster_assert(!XCLUSTER_IS_SENTINEL((&_node->elms[i])));
         }
+        xcluster_assert(_node->count > 0);
         xcluster_assert(XCLUSTER_IS_SENTINEL((&_node->elms[_node->count])));
         xcluster_node_t *bb = (xcluster_node_t*) XCLUSTER_SENTINEL_GET_PTR((&_node->elms[_node->count]));
         xcluster_assert(bb == _node);
