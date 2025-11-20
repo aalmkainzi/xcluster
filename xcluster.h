@@ -165,7 +165,7 @@ do                                                                      \
 void xcluster_assign_sentinel(XCLUSTER_T *elm, xcluster_node_t *node)
 {
     XCLUSTER_MAKE_SENTINEL((elm));
-    XCLUSTER_SENTINEL_SET_PTR((elm), (node));
+    XCLUSTER_SENTINEL_SET_PTR((elm), (node->next->elms));
 }
 
 void xcluster_init(XCLUSTER_NAME *_xc)
@@ -191,13 +191,15 @@ void xcluster_init(XCLUSTER_NAME *_xc)
     _xc->prev_cap = 2048;
 }
 
+void xcluster_assign_next(xcluster_node_t *_node, xcluster_node_t *_new_next);
+
 XCLUSTER_NAME xcluster_clone(XCLUSTER_NAME *_xc)
 {
     XCLUSTER_NAME ret;
     xcluster_init(&ret);
     
     ret.head = ret.tail = xcluster_alloc_node(&ret);
-    ret.tail->next = ret.end_sentinel;
+    xcluster_assign_next(ret.tail, ret.end_sentinel);
     ret.end_sentinel->prev = ret.tail;
     
     ret.head->elms = (XCLUSTER_T*) malloc((_xc->count + 1) * sizeof(XCLUSTER_T));
@@ -245,6 +247,12 @@ void xcluster_push_not_full_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
     _node->not_full_index = _xc->not_full_nodes.count - 1;
 }
 
+void xcluster_assign_next(xcluster_node_t *_node, xcluster_node_t *_new_next)
+{
+    _node->next = _new_next;
+    XCLUSTER_SENTINEL_SET_PTR((&_node->elms[_node->count]), _new_next->elms);
+}
+
 void xcluster_unlink_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
 {
     if(_node == _xc->head)
@@ -259,12 +267,12 @@ void xcluster_unlink_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
     else if(_node == _xc->tail)
     {
         _xc->tail = _xc->tail->prev;
-        _xc->tail->next = _xc->end_sentinel;
+        xcluster_assign_next(_xc->tail, _xc->end_sentinel);
         _xc->end_sentinel->prev = _xc->tail;
     }
     else
     {
-        _node->prev->next = _node->next;
+        xcluster_assign_next(_node->prev, _node->next);
         _node->next->prev = _node->prev;
     }
     
@@ -273,14 +281,15 @@ void xcluster_unlink_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
 
 void xcluster_steal_node_links(XCLUSTER_NAME *_xc, xcluster_node_t *_new_node, xcluster_node_t *_old_node)
 {
-    _new_node->next = _old_node->next;
+    xcluster_assign_next(_new_node, _old_node->next);
+    
     _new_node->prev = _old_node->prev;
     
     _new_node->next->prev = _new_node;
     
     if(_new_node->prev != NULL)
     {
-        _new_node->prev->next = _new_node;
+        xcluster_assign_next(_new_node->prev, _new_node);
     }
     
     if(_old_node == _xc->head)
@@ -300,15 +309,15 @@ void xcluster_link_node(XCLUSTER_NAME *_xc, xcluster_node_t *_node)
     if(_xc->tail == _xc->end_sentinel) // empty
     {
         _xc->head = _xc->tail = _node;
-        _node->next = _xc->end_sentinel;
+        xcluster_assign_next(_node, _xc->end_sentinel);
         _xc->end_sentinel->prev = _node;
     }
     else
     {
-        _xc->tail->next = _node;
+        xcluster_assign_next(_xc->tail, _node);
         _node->prev = _xc->tail;
         _xc->tail = _node;
-        _node->next = _xc->end_sentinel;
+        xcluster_assign_next(_node, _xc->end_sentinel);
         _xc->end_sentinel->prev = _node;
     }
 }
@@ -418,8 +427,6 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
     
     XCLUSTER_T *ret = &new_node->elms[0];
     
-    xcluster_assign_sentinel(&new_node->elms[1], new_node);
-    
     new_node->count = 1;
     
     if(_xc->count == 0)
@@ -428,15 +435,18 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
     }
     else
     {
-        _xc->tail->next = new_node;
+        xcluster_assign_next(_xc->tail, new_node);
         new_node->prev = _xc->tail;
     }
     _xc->tail = new_node;
     _xc->end_sentinel->prev = new_node;
-    new_node->next = _xc->end_sentinel;
+    
+    xcluster_assign_next(new_node, _xc->end_sentinel);
     
     xcluster_push_not_full_node(_xc, new_node);
     _xc->count += 1;
+    
+    xcluster_assign_sentinel(&new_node->elms[1], new_node);
     
     memcpy(ret, _new_elm, sizeof(XCLUSTER_T));
 #ifdef XCLUSTER_DEBUG
@@ -514,13 +524,22 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
 {
     _xc->count -= 1;
     
-    XCLUSTER_T *end = _elm;
-    while( !XCLUSTER_IS_SENTINEL(end) )
+    // XCLUSTER_T *end = _elm;
+    // while( !XCLUSTER_IS_SENTINEL(end) )
+    // {
+    //     end += 1;
+    // }
+    xcluster_node_t *_cur = _xc->head;
+    while(
+        !(
+            (uintptr_t)_cur->elms <= (uintptr_t)_elm && 
+            (uintptr_t)&_cur->elms[_cur->count] > (uintptr_t)_elm)
+        )
     {
-        end += 1;
+        _cur = _cur->next;
     }
     
-    xcluster_node_t *bp = (xcluster_node_t*) XCLUSTER_SENTINEL_GET_PTR(end);
+    xcluster_node_t *bp = _cur;
     xcluster_node_t *bp_next_node = bp->next;
     xcluster_node_t *bp_prev_node = bp->prev;
     
@@ -587,11 +606,22 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
             { // begin
                 if(new_node->cap > new_node->count)
                 {
-                    xcluster_push_not_full_node(_xc, new_node);
+                    if(bp->not_full_index != (size_t)-1)
+                    {
+                        xcluster_steal_node_not_full_index(_xc, new_node, bp);
+                    }
+                    else
+                    {
+                        xcluster_push_not_full_node(_xc, new_node);
+                    }
+                }
+                else if(bp->not_full_index != (size_t)-1)
+                {
+                    xcluster_erase_not_full_node(_xc, bp);
                 }
                 
                 xcluster_assert(
-                    XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp
+                    XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp->next->elms
                 );
                 
                 xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
@@ -613,7 +643,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                 
                 xcluster_assert(new_node->bridge_prev != new_node);
 #ifdef XCLUSTER_DEBUG
-                xcluster_validate(_xc); // error found in this branch. bp is still linked
+                xcluster_validate(_xc); // now the problem is bp has cap 0 but is still in not_full_nodes
 #endif
                 return ret;
             } // end
@@ -649,16 +679,15 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                 }
                 
                 xcluster_assert(
-                    XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp
+                    XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp->next->elms
                 );
-                
-                xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
                 
                 XCLUSTER_T *ret = NULL;
                 
                 if(new_node->count != 0)
                 {
                     xcluster_steal_node_links(_xc, new_node, bp);
+                    xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
                     ret = new_node->elms;
                 }
                 else
@@ -706,10 +735,12 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
         bp->count = deleted_index;
         bp->cap = bp->count;
         
-        new_node->next = bp->next;
+        new_node->elms = bp->elms + bp->count + 1;
+        
+        xcluster_assign_next(new_node, bp->next);
         new_node->prev = bp;
         new_node->next->prev = new_node;
-        new_node->prev->next = new_node;
+        xcluster_assign_next(new_node->prev, new_node);
         
         if(bp == _xc->tail)
         {
@@ -724,8 +755,6 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
         {
             new_node->bridge_next->bridge_prev = new_node;
         }
-        
-        new_node->elms = bp->elms + bp->count + 1;
         
         xcluster_assert((bp->elms + bp->cap + 1) == new_node->elms);
         
@@ -776,8 +805,7 @@ XCLUSTER_T *xcluster_next(XCLUSTER_T *it)
     it += 1;
     if(XCLUSTER_IS_SENTINEL(it))
     {
-        xcluster_node_t *node = (xcluster_node_t*) XCLUSTER_SENTINEL_GET_PTR(it);
-        return node->next->elms;
+        return (XCLUSTER_T*) XCLUSTER_SENTINEL_GET_PTR(it);
     }
     return it;
 }
@@ -797,8 +825,8 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
         }
         xcluster_assert(_node->count > 0);
         xcluster_assert(XCLUSTER_IS_SENTINEL((&_node->elms[_node->count])));
-        xcluster_node_t *bb = (xcluster_node_t*) XCLUSTER_SENTINEL_GET_PTR((&_node->elms[_node->count]));
-        xcluster_assert(bb == _node);
+        XCLUSTER_T *bb = (XCLUSTER_T*) XCLUSTER_SENTINEL_GET_PTR((&_node->elms[_node->count]));
+        xcluster_assert(bb == _node->next->elms);
         
         xcluster_assert(_node->prev == prev);
         
@@ -825,7 +853,14 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
         xcluster_assert(prev != NULL);
         xcluster_assert((prev->elms + prev->cap + 1) == node->elms);
         xcluster_assert(prev->bridge_next == node);
-        xcluster_assert(XCLUSTER_SENTINEL_GET_PTR(&prev->elms[prev->count]) == prev);
+        if(prev->next == NULL)
+        {
+            xcluster_assert(prev->count == 0);
+        }
+        else
+        {
+            xcluster_assert(XCLUSTER_SENTINEL_GET_PTR(&prev->elms[prev->count]) == prev->next->elms);
+        }
     }
     
     xcluster_assert(accum == _xc->count);
