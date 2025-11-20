@@ -605,6 +605,7 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                 }
                 else
                 {
+                    xcluster_unlink_node(_xc, bp);
                     ret = bp_next_node->elms;
                 }
                 
