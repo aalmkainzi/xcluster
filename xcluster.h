@@ -399,7 +399,7 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         }
         else
         {
-            XCLUSTER_SENTINEL_SET_PTR((&prev->elms[prev->count]), (prev->next->elms));
+            XCLUSTER_SENTINEL_SET_PTR((&prev->elms[prev->count]), (prev->next->elms)); // replace this with xcluster_assign_sentinel call
         }
         
         if(prev->count < prev->cap)
