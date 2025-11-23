@@ -27,7 +27,9 @@ ALSO. think of an unstable_handle/iterator type that can enable fast erasure
 #endif
 
 #if defined(XCLUSTER_DEBUG)
-    #define xcluster_assert assert
+    #define xcluster_assert(...) assert(__VA_ARGS__)
+#else
+    #define xcluster_assert(...) ((void)0)
 #endif
 
 #define XCLUSTER_CAT_(a, _node) a##_node
@@ -199,10 +201,11 @@ XCLUSTER_NAME xcluster_clone(XCLUSTER_NAME *_xc)
     xcluster_init(&ret);
     
     ret.head = ret.tail = xcluster_alloc_node(&ret);
+    ret.head->elms = (XCLUSTER_T*) malloc((_xc->count + 1) * sizeof(XCLUSTER_T));
+    
     xcluster_assign_next(ret.tail, ret.end_sentinel);
     ret.end_sentinel->prev = ret.tail;
     
-    ret.head->elms = (XCLUSTER_T*) malloc((_xc->count + 1) * sizeof(XCLUSTER_T));
     XCLUSTER_MAYBE_GROW(ret.allocations);
     XCLUSTER_PUSH(ret.allocations, ret.head->elms);
     
@@ -395,11 +398,12 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         }
         else if(node->next != NULL)
         {
+            xcluster_assign_sentinel(&prev->elms[prev->count], prev);
             xcluster_unlink_node(_xc, node);
         }
         else
         {
-            XCLUSTER_SENTINEL_SET_PTR((&prev->elms[prev->count]), (prev->next->elms)); // replace this with xcluster_assign_sentinel call
+            xcluster_assign_sentinel(&prev->elms[prev->count], prev);
         }
         
         if(prev->count < prev->cap)
