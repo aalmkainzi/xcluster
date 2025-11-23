@@ -376,8 +376,6 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         
         prev->count += 1 + node->count;
         
-        XCLUSTER_SENTINEL_SET_PTR((&prev->elms[prev->count]), (prev));
-        
         prev->bridge_next = node->bridge_next;
         if(prev->bridge_next != NULL)
         {
@@ -398,6 +396,10 @@ XCLUSTER_T *xcluster_put_ptr(XCLUSTER_NAME *_xc, const XCLUSTER_T *_new_elm)
         else if(node->next != NULL)
         {
             xcluster_unlink_node(_xc, node);
+        }
+        else
+        {
+            XCLUSTER_SENTINEL_SET_PTR((&prev->elms[prev->count]), (prev->next->elms));
         }
         
         if(prev->count < prev->cap)
@@ -624,13 +626,12 @@ XCLUSTER_T *xcluster_del(XCLUSTER_NAME *_xc, XCLUSTER_T *_elm)
                     XCLUSTER_SENTINEL_GET_PTR((&new_node->elms[new_node->count])) == bp->next->elms
                 );
                 
-                xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
-                
                 XCLUSTER_T *ret = NULL;
                 
                 if(new_node->count != 0)
                 {
                     xcluster_steal_node_links(_xc, new_node, bp);
+                    xcluster_assign_sentinel(&new_node->elms[new_node->count], new_node);
                     ret = new_node->elms;
                 }
                 else
