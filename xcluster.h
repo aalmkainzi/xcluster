@@ -107,17 +107,9 @@ typedef struct xcluster_node_t
     size_t cap;
 } xcluster_node_t;
 
-// TODO const iterator. it will be invalidated by inserts/deletes
+// TODO unstable iterator. it will be invalidated by inserts/deletes
 // but is faster to iterate, since we wont check for sentinel every iteration,
 // instead we know each node's count
-
-// TODO maybe some kind of SOA thing
-// where each node stores array for EACH type
-// actually, the user type doesn't *need* a pointer field
-// if the pointer field macros are not defined,
-// we can just store a secondary buffer for pointers only
-// it wont slow down iteration speed
-// because we'll only use that buffer when we reach a node's end
 
 #ifdef XCLUSTER_DEBUG
     #define xcluster_validate XCLUSTER_CAT(XCLUSTER_NAME, _validate)
