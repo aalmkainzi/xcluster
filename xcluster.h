@@ -119,10 +119,6 @@ typedef struct xcluster_node_t
 // it wont slow down iteration speed
 // because we'll only use that buffer when we reach a node's end
 
-// TODO An approach to avoid needing pointer from sentinel, and to avoid xcluster_del being slow:
-// store a second array of pointers to the owning bucket, kinda crazy, will use lots of memory
-// but iteration speed shouldn't be affected I think.
-
 #ifdef XCLUSTER_DEBUG
     #define xcluster_validate XCLUSTER_CAT(XCLUSTER_NAME, _validate)
     bool xcluster_validate(XCLUSTER_NAME *_xc);
@@ -137,6 +133,8 @@ typedef struct xcluster_node_t
 #define xcluster_steal_node_not_full_index XCLUSTER_CAT(XCLUSTER_NAME, _steal_node_not_full_index)
 #define xcluster_bridges_with_prev_index   XCLUSTER_CAT(XCLUSTER_NAME, _bridges_with_prev_index)
 #define xcluster_link_node                 XCLUSTER_CAT(XCLUSTER_NAME, _link_node)
+#define xcluster_push_to_node_reserve      XCLUSTER_CAT(XCLUSTER_NAME, _push_to_node_reserve)
+#define xcluster_assign_next               XCLUSTER_CAT(XCLUSTER_NAME, _assign_next)
 
 xcluster_node_t *xcluster_alloc_node(XCLUSTER_NAME *_xc);
 
@@ -815,6 +813,7 @@ XCLUSTER_T *xcluster_next(XCLUSTER_T *it)
     return it;
 }
 
+#ifdef XCLUSTER_DEBUG
 bool xcluster_validate(XCLUSTER_NAME *_xc)
 {
     xcluster_node_t *_node = _xc->head;
@@ -871,8 +870,9 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
     xcluster_assert(accum == _xc->count);
     return true;
 }
+#endif // XCLUSTER_DEBUG
 
-#endif
+#endif // XCLUSTER_IMPL
 
 #undef XCLUSTER_CAT_
 #undef XCLUSTER_CAT
@@ -911,6 +911,8 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
 #undef xcluster_steal_node_not_full_index
 #undef xcluster_bridges_with_prev_index
 #undef xcluster_link_node
+#undef xcluster_push_to_node_reserve
+#undef xcluster_assign_next
 #undef xcluster_validate
 
 #undef XCLUSTER_PUSH
