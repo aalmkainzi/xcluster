@@ -877,11 +877,14 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
 #undef XCLUSTER_CAT_
 #undef XCLUSTER_CAT
 
+#undef xcluster_assert
+
 #undef XCLUSTER_TYPEOF
 
 #undef xcluster_node_t
 
 #undef xcluster_init
+#undef xcluster_clone
 #undef xcluster_put_ptr
 #undef xcluster_put
 #undef xcluster_del

@@ -70,8 +70,18 @@ int main(int argc, char **argv)
             char *macro_dup = malloc(j + 1);
             memcpy(macro_dup, macro_name, j);
             macro_dup[j] = 0;
+            for(size_t i = 0 ; i < arrlen(macros) ; i++)
+            {
+                if(strcmp(macro_dup, macros[i]) == 0)
+                {
+                    goto no_push;
+                }
+            }
+            
             arrpush(macros, macro_dup);
             printf("[INFO]: found macro: \"%s\"\n", macro_dup);
+            
+            no_push:;
         }
     }
     
