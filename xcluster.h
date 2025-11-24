@@ -877,6 +877,15 @@ bool xcluster_validate(XCLUSTER_NAME *_xc)
 #undef XCLUSTER_CAT_
 #undef XCLUSTER_CAT
 
+#undef XCLUSTER_T
+#undef XCLUSTER_NAME
+
+#undef XCLUSTER_MAKE_SENTINEL
+#undef XCLUSTER_IS_SENTINEL
+#undef XCLUSTER_SENTINEL_SET_PTR
+#undef XCLUSTER_SENTINEL_GET_PTR
+#undef XCLUSTER_IMPL
+
 #undef xcluster_assert
 
 #undef XCLUSTER_TYPEOF
